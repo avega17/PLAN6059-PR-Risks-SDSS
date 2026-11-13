@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+output/
+dist/
+tmp/
+*.lock
+*.lck
+*.sr.lock
+*.sch.lock
+
+Hazard_Variables/Drought/*
+Hazard_Variables/Hurricanes/*

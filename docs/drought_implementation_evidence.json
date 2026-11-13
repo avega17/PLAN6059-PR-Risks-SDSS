@@ -1,0 +1,308 @@
+{
+  "implementation_date": "2026-11-12",
+  "baseline_maps": 1357,
+  "buffers": 3,
+  "normalized_rows": 654160,
+  "validation_passed": true,
+  "validation_checks": 125,
+  "offline_full_acquisition_network_requests": 0,
+  "automated_tests": 52,
+  "new_drought_tests": 22,
+  "actual_script_tools_passed": true,
+  "relocated_script_tools_passed": true,
+  "warning_counts": {
+    "MULTIPLE_DM_FEATURES": 225,
+    "CATEGORY_TOTAL_DISAGREEMENT": 4,
+    "CROSS_FORMAT_DISAGREEMENT": 2
+  },
+  "reference_disagreements": [
+    {
+      "SEVERITY": "WARNING",
+      "CODE": "CATEGORY_TOTAL_DISAGREEMENT",
+      "MAP_DATE": "2015-08-11",
+      "GEO_ID": "72",
+      "DETAIL": "Total deviation 0.3200 percentage points; raw values retained."
+    },
+    {
+      "SEVERITY": "WARNING",
+      "CODE": "CATEGORY_TOTAL_DISAGREEMENT",
+      "MAP_DATE": "2015-08-04",
+      "GEO_ID": "72",
+      "DETAIL": "Total deviation 0.3300 percentage points; raw values retained."
+    },
+    {
+      "SEVERITY": "WARNING",
+      "CODE": "CATEGORY_TOTAL_DISAGREEMENT",
+      "MAP_DATE": "2015-08-11",
+      "GEO_ID": "72049",
+      "DETAIL": "Total deviation 100.0000 percentage points; raw values retained."
+    },
+    {
+      "SEVERITY": "WARNING",
+      "CODE": "CATEGORY_TOTAL_DISAGREEMENT",
+      "MAP_DATE": "2015-08-04",
+      "GEO_ID": "72049",
+      "DETAIL": "Total deviation 100.0000 percentage points; raw values retained."
+    },
+    {
+      "SEVERITY": "WARNING",
+      "CODE": "CROSS_FORMAT_DISAGREEMENT",
+      "MAP_DATE": "2015-08-04",
+      "GEO_ID": "72",
+      "DETAIL": "Max difference 0.3300 percentage points; do not renormalize."
+    },
+    {
+      "SEVERITY": "WARNING",
+      "CODE": "CROSS_FORMAT_DISAGREEMENT",
+      "MAP_DATE": "2015-08-11",
+      "GEO_ID": "72",
+      "DETAIL": "Max difference 0.3200 percentage points; do not renormalize."
+    }
+  ],
+  "spatial_pilot": {
+    "created_utc": "2026-11-12T23:27:33.136716+00:00",
+    "download_manifest": "output/drought_baseline/acquire/download_manifest.json",
+    "arcgis_version": "3.7",
+    "license": "ArcInfo",
+    "download_status_at_audit": "complete",
+    "samples": [
+      {
+        "map_date": "2000-01-04",
+        "raw_zip_sha256": "e54a7417c3f3e3489b5e12c4873bff2a26538d89ec1ad0dee8b9d57af928bbf0",
+        "source_crs": "GCS_WGS_1984",
+        "source_wkid": 4326,
+        "to_source_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "to_target_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "projected_feature_count": 0,
+        "geometry_issues": 0,
+        "cross_category_overlap_square_meters": 0.0,
+        "source_dm_area_square_meters": {},
+        "provisional_boundary_area_square_meters": 9005920164.74471,
+        "known_dry_category_fraction_of_boundary": 0.0,
+        "control_raw_dm_matches": {
+          "mainland": [],
+          "Vieques": [],
+          "Culebra": [],
+          "Mona": []
+        },
+        "partial_raster": "C:\\Users\\ALEJANDROSVEGANOGALE\\Documents\\Repos\\PLAN6059-PR-Risks-SDSS\\output\\drought_readiness\\20000104_partial_categories250.tif",
+        "raster_values": [
+          255
+        ],
+        "land_cells_with_source_category": 0,
+        "land_cells_unresolved_none_or_unassessed": 144085,
+        "raster_alignment_passed": true,
+        "source_unchanged": true
+      },
+      {
+        "map_date": "2015-08-04",
+        "raw_zip_sha256": "e3f868a031ed8158263f83a5b9c91403d31cc31b4eee4da5acab0222b09b0792",
+        "source_crs": "GCS_WGS_1984",
+        "source_wkid": 4326,
+        "to_source_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "to_target_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "projected_feature_count": 4,
+        "geometry_issues": 0,
+        "cross_category_overlap_square_meters": 0.0,
+        "source_dm_area_square_meters": {
+          "0": 2114401338.0670722,
+          "1": 1440885348.6100488,
+          "2": 2136715099.5218163,
+          "3": 1804095345.5560567
+        },
+        "provisional_boundary_area_square_meters": 9005920164.74471,
+        "known_dry_category_fraction_of_boundary": 0.8323521633136178,
+        "control_raw_dm_matches": {
+          "mainland": [
+            1
+          ],
+          "Vieques": [
+            2
+          ],
+          "Culebra": [
+            2
+          ],
+          "Mona": [
+            0
+          ]
+        },
+        "partial_raster": "C:\\Users\\ALEJANDROSVEGANOGALE\\Documents\\Repos\\PLAN6059-PR-Risks-SDSS\\output\\drought_readiness\\20150804_partial_categories250.tif",
+        "raster_values": [
+          1,
+          2,
+          3,
+          4,
+          255
+        ],
+        "land_cells_with_source_category": 119931,
+        "land_cells_unresolved_none_or_unassessed": 24154,
+        "raster_alignment_passed": true,
+        "source_unchanged": true
+      },
+      {
+        "map_date": "2015-08-11",
+        "raw_zip_sha256": "c13ff4e5b7fd0b51b42d6f101bd1ee5cc8ca8d7d5f7f2339a8e6c235906b85c5",
+        "source_crs": "GCS_WGS_1984",
+        "source_wkid": 4326,
+        "to_source_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "to_target_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "projected_feature_count": 4,
+        "geometry_issues": 0,
+        "cross_category_overlap_square_meters": 0.0,
+        "source_dm_area_square_meters": {
+          "0": 2010017726.889701,
+          "1": 1675469818.3214521,
+          "2": 1727772891.9606102,
+          "3": 2213037248.7124453
+        },
+        "provisional_boundary_area_square_meters": 9005920164.74471,
+        "known_dry_category_fraction_of_boundary": 0.8468093816486091,
+        "control_raw_dm_matches": {
+          "mainland": [
+            1
+          ],
+          "Vieques": [
+            2
+          ],
+          "Culebra": [
+            2
+          ],
+          "Mona": [
+            0
+          ]
+        },
+        "partial_raster": "C:\\Users\\ALEJANDROSVEGANOGALE\\Documents\\Repos\\PLAN6059-PR-Risks-SDSS\\output\\drought_readiness\\20150811_partial_categories250.tif",
+        "raster_values": [
+          1,
+          2,
+          3,
+          4,
+          255
+        ],
+        "land_cells_with_source_category": 122012,
+        "land_cells_unresolved_none_or_unassessed": 22073,
+        "raster_alignment_passed": true,
+        "source_unchanged": true
+      },
+      {
+        "map_date": "2012-10-16",
+        "raw_zip_sha256": "0f9ffcb5d5808cb0f484b00c86189970d6ebaa6e6b763d91f02c395c81912c10",
+        "source_crs": "GCS_WGS_1984",
+        "source_wkid": 4326,
+        "to_source_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "to_target_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "projected_feature_count": 1,
+        "geometry_issues": 0,
+        "cross_category_overlap_square_meters": 0.0,
+        "source_dm_area_square_meters": {
+          "0": 1445014898.550949
+        },
+        "provisional_boundary_area_square_meters": 9005920164.74471,
+        "known_dry_category_fraction_of_boundary": 0.16045166647242987,
+        "control_raw_dm_matches": {
+          "mainland": [],
+          "Vieques": [],
+          "Culebra": [],
+          "Mona": []
+        },
+        "partial_raster": "C:\\Users\\ALEJANDROSVEGANOGALE\\Documents\\Repos\\PLAN6059-PR-Risks-SDSS\\output\\drought_readiness\\20121016_partial_categories250.tif",
+        "raster_values": [
+          1,
+          255
+        ],
+        "land_cells_with_source_category": 23112,
+        "land_cells_unresolved_none_or_unassessed": 120973,
+        "raster_alignment_passed": true,
+        "source_unchanged": true
+      },
+      {
+        "map_date": "2026-01-06",
+        "raw_zip_sha256": "386aaad73572312eaea6399ff59ac43343e1c1d1e0b7370f38fb71c9809e7049",
+        "source_crs": "GCS_WGS_1984",
+        "source_wkid": 4326,
+        "to_source_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "to_target_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "projected_feature_count": 1,
+        "geometry_issues": 0,
+        "cross_category_overlap_square_meters": 0.0,
+        "source_dm_area_square_meters": {
+          "0": 1886315614.273111
+        },
+        "provisional_boundary_area_square_meters": 9005920164.74471,
+        "known_dry_category_fraction_of_boundary": 0.2094528465461455,
+        "control_raw_dm_matches": {
+          "mainland": [],
+          "Vieques": [],
+          "Culebra": [],
+          "Mona": []
+        },
+        "partial_raster": "C:\\Users\\ALEJANDROSVEGANOGALE\\Documents\\Repos\\PLAN6059-PR-Risks-SDSS\\output\\drought_readiness\\20260106_partial_categories250.tif",
+        "raster_values": [
+          1,
+          255
+        ],
+        "land_cells_with_source_category": 30165,
+        "land_cells_unresolved_none_or_unassessed": 113920,
+        "raster_alignment_passed": true,
+        "source_unchanged": true
+      },
+      {
+        "map_date": "2026-08-04",
+        "raw_zip_sha256": "5731d443f3af850e450d677eb9866e2bcf6391e2b1ccfc4d1f91e0d665bba638",
+        "source_crs": "GCS_WGS_1984",
+        "source_wkid": 4326,
+        "to_source_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "to_target_transformation": "WGS_1984_(ITRF00)_To_NAD_1983",
+        "projected_feature_count": 4,
+        "geometry_issues": 0,
+        "cross_category_overlap_square_meters": 0.0,
+        "source_dm_area_square_meters": {
+          "0": 993675964.8554178,
+          "1": 2803141029.388239,
+          "2": 2317353423.1330576,
+          "3": 826435787.545417
+        },
+        "provisional_boundary_area_square_meters": 9005920164.74471,
+        "known_dry_category_fraction_of_boundary": 0.7706715225049827,
+        "control_raw_dm_matches": {
+          "mainland": [
+            1
+          ],
+          "Vieques": [
+            1
+          ],
+          "Culebra": [
+            1
+          ],
+          "Mona": []
+        },
+        "partial_raster": "C:\\Users\\ALEJANDROSVEGANOGALE\\Documents\\Repos\\PLAN6059-PR-Risks-SDSS\\output\\drought_readiness\\20260804_partial_categories250.tif",
+        "raster_values": [
+          1,
+          2,
+          3,
+          4,
+          255
+        ],
+        "land_cells_with_source_category": 111037,
+        "land_cells_unresolved_none_or_unassessed": 33048,
+        "raster_alignment_passed": true,
+        "source_unchanged": true
+      }
+    ],
+    "scope": "Feasibility only. Unmapped land remains unknown; no frequency, duration or ranks calculated.",
+    "geometry_pilot_passed": true,
+    "ready_for_controlled_raster_pilot": true,
+    "ready_for_full_frequency_duration": false,
+    "ready_for_final_hazard_ranking": false
+  },
+  "mcp_bridge": {
+    "bridge_version": "0.6.8",
+    "tool_count": 103,
+    "real_arcpy_smoke_passed": true,
+    "out_of_root_read_blocked": true,
+    "base_conda_metadata_unchanged": true
+  },
+  "saved_drought_model_graph": false,
+  "manual_modelbuilder_guide": "drought_modelbuilder_setup.md"
+}
