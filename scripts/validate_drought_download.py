@@ -10,10 +10,8 @@ def main():
     try:
         result = validate_drought_download(arcpy.GetParameterAsText(0),arcpy.GetParameterAsText(1))
         arcpy.SetParameterAsText(2,result['report'])
-        arcpy.SetParameter(3,result['passed'])
         arcpy.AddMessage('Download validation passed; spatial readiness gates remain in the report.')
     except Exception as error:
-        arcpy.SetParameter(3,False)
         arcpy.AddError(str(error))
         raise
 

@@ -13,7 +13,7 @@ def main():
                                           boundary=arcpy.GetParameterAsText(1) or None)
         for index, key in enumerate(
                 ('reference_raster', 'mask_raster', 'projected_boundary',
-                 'grid_spec_path', 'manifest'), 2):
+                 'grid_spec_path'), 2):
             arcpy.SetParameterAsText(index, result[key])
         arcpy.AddMessage('Provisional 250 m grid created; coastline generalization remains documented.')
     except Exception as error:

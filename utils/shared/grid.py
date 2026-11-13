@@ -221,7 +221,6 @@ def establish_reference_grid(output_folder, boundary=None, cell_size=250):
     reference = str(output / "reference250.tif")
     mask = str(output / "study_mask250.tif")
     spec_path = str(output / "grid_spec.json")
-    manifest_path = str(output / "grid_manifest.json")
     natural_earth = boundary is None or boundary == ""
     if natural_earth:
         boundary, provenance = _natural_earth_source(output / "_cache" / "naturalearth-5.1.1")
@@ -311,7 +310,6 @@ def establish_reference_grid(output_folder, boundary=None, cell_size=250):
             "reference_raster": reference,
             "mask_raster": mask,
             "grid_spec_path": spec_path,
-            "manifest": manifest_path,
             "boundary_source": provenance,
             "geographic_transformation": transform or None,
             "transformation_candidates": candidates,
@@ -365,6 +363,5 @@ def establish_reference_grid(output_folder, boundary=None, cell_size=250):
         spec["reference_cells"] = int(array.size)
         spec["land_area_grid_m2"] = spec["land_cells"] * 250 * 250
         _write_json(spec_path, spec)
-        _write_json(manifest_path, spec)
     arcpy.AddMessage(f"Reference grid: {spec['columns']} columns x {spec['rows']} rows; {spec['land_cells']} land cells.")
     return spec

@@ -7,11 +7,10 @@ import re
 from urllib.parse import urljoin, urlparse
 
 from .usdm_archive import ZIP_DATE, archive_date
-from .usdm_common import VERSION, as_date, protect_source, publish_csv_table, sha256, utc_now, write_csv, write_json
+from .usdm_common import VERSION, as_date, protect_source, sha256, utc_now, write_json
 
 FIRST_MAP = date(2000,1,4)
 CATALOG_URL = 'https://droughtmonitor.unl.edu/Data/shapefiles_m/'
-WEEK_SCHEMA = [('MAP_DATE','DATE',None),('ROLE','TEXT',16)]
 
 
 def make_calendar(start_date, end_date, buffer_weeks=3, mode='Baseline', today=None):
@@ -94,15 +93,12 @@ def plan_drought_download(start_date, end_date, output_folder, local_archive_fol
     for day, items in candidates.items():
         if len({item['sha256'] for item in items})>1:
             raise ValueError(f'Conflicting local archives for {day}; choose a frozen snapshot explicitly')
-    calendar_csv = write_csv(output/'expected_weeks.csv',['MAP_DATE','ROLE'],cohort['weeks'])
-    calendar_table = (publish_csv_table(calendar_csv,output/'drought_plan.gdb','expected_weeks',WEEK_SCHEMA)
-                      if publish_tables else calendar_csv)
     result = {'schema_version':1,'product':'USDM merged weekly drought polygons',
         'created_utc':utc_now(),'software_version':VERSION,'geography':'Puerto Rico','state_fips':'72',
         **cohort,'recovery_buffer_weeks':int(recovery_buffer_weeks),
         'include_municipio_statistics':bool(include_municipio_statistics),
         'local_archive_folder':str(source) if source else None,'local_candidates':candidates,
-        'catalog_url':CATALOG_URL,'expected_weeks':calendar_table,'calendar_csv':calendar_csv,
+        'catalog_url':CATALOG_URL,
         'plan':str(output/'download_plan.json'),
         'interpretation':'Map-date cohort, not a reconstruction of daily conditions; buffers excluded from the baseline.',
         'scope':'Acquisition only; assessed-domain verification, rasterization and hazard ranking are later stages.'}

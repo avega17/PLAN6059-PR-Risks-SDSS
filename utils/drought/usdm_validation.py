@@ -1,13 +1,12 @@
 """Revalidate acquired bytes, statistics and chronology without network access."""
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 
 from .usdm_archive import inspect_zip
-from .usdm_common import DroughtAcquisitionError, read_json, sha256, utc_now, write_json
+from .usdm_common import DroughtAcquisitionError, normalized_reader, typed_value, read_json, sha256, utc_now, write_json
 from .usdm_download import validate_plan
-from .usdm_statistics import STAT_FIELDS, compare_state_formats, normalize_payload, statistic_jobs
+from .usdm_statistics import STAT_SCHEMA, QC_SCHEMA, compare_state_formats, normalize_payload, statistic_jobs
 
 
 def validate_drought_download(download_manifest, output_folder):
@@ -68,9 +67,7 @@ def validate_drought_download(download_manifest, output_folder):
         check('Statistics request jobs match the declared products and years',
             [r['job'] for r in manifest['statistics_requests']]==statistic_jobs(plan))
         expected_rows, mismatches = 0,0
-        with Path(manifest['canonical_csv']).open(newline='',encoding='utf-8') as stream:
-            canonical = csv.DictReader(stream)
-            check('Canonical table schema matches the contract',canonical.fieldnames==STAT_FIELDS)
+        with normalized_reader(manifest['statistics'], STAT_SCHEMA) as canonical:
             for receipt in manifest['statistics_requests']:
                 rows,issues,seen,counts = normalize_payload(read_json(receipt['path']),receipt['job'],expected,receipt['sha256'])
                 warnings.extend(issues)
@@ -82,27 +79,26 @@ def validate_drought_download(download_manifest, output_folder):
                         state.setdefault(day,{})[key] = raw
                 for row in rows:
                     recorded = next(canonical,None)
-                    if recorded != {key:str(row[key]) for key in STAT_FIELDS}:
+                    if recorded != {key:typed_value(row[key], kind) for key, kind, _ in STAT_SCHEMA}:
                         mismatches += 1
                     expected_rows += 1
-            check('Canonical table contains no extra rows',next(canonical,None) is None)
-        check('Every canonical value is reproducible from frozen raw statistics',mismatches==0,{'mismatches':mismatches})
+            check('Normalized table contains no extra rows',next(canonical,None) is None)
+        check('Every normalized value is reproducible from frozen raw statistics',mismatches==0,{'mismatches':mismatches})
         check('Normalized row count reconciles',expected_rows==manifest['normalized_rows'],expected_rows)
-        check('Canonical and QC file hashes match',sha256(manifest['canonical_csv'])==manifest['canonical_sha256']
-              and sha256(manifest['qc_csv'])==manifest['qc_sha256'])
+        for path_key, hash_key in (('canonical_csv', 'canonical_sha256'), ('qc_csv', 'qc_sha256')):
+            if manifest.get(path_key):
+                check('Optional/primary CSV hash matches: ' + path_key,
+                      sha256(manifest[path_key]) == manifest[hash_key])
+        with normalized_reader(manifest['qc'], QC_SCHEMA) as recorded_qc:
+            expected_qc = [{key:typed_value(row[key], kind) for key, kind, _ in QC_SCHEMA}
+                           for row in manifest['warnings']]
+            check('Every retained QC value matches acquisition warnings', list(recorded_qc) == expected_qc)
         cross_warnings = compare_state_formats(state)
         expected_warnings = warnings+cross_warnings
         # Archive warnings are transport/schema observations, not source-statistic repairs.
         recorded_stat_warnings = [w for w in manifest['warnings'] if w['CODE'] not in
                                   ('CATALOG_SIZE_CHANGED','MULTIPLE_DM_FEATURES')]
         check('Reference disagreements are retained and reproducible',expected_warnings==recorded_stat_warnings)
-        if manifest['statistics'].endswith('.gdb/statistics') or '.gdb\\' in manifest['statistics']:
-            import arcpy
-            with arcpy.EnvManager(extent=None,mask=None):
-                check('Published Statistics table row count matches canonical CSV',
-                    int(arcpy.management.GetCount(manifest['statistics'])[0])==expected_rows)
-                check('Published QC table row count matches recorded warnings',
-                    int(arcpy.management.GetCount(manifest['qc'])[0])==len(manifest['warnings']))
         report.update(baseline_maps=plan['baseline_count'],buffer_maps=len(expected)-plan['baseline_count'],
             mode=plan['mode'],year_count=plan['year_count'],normalized_rows=expected_rows,
             reference_warning_count=len(manifest['warnings']),source_crs_variants=sorted(projections),
@@ -115,11 +111,6 @@ def validate_drought_download(download_manifest, output_folder):
     report['passed'] = bool(checks) and all(c['passed'] for c in checks)
     report['report'] = str(report_path)
     write_json(report_path,report)
-    lines = ['# Drought download validation','',f'Passed: **{report["passed"]}**','',
-             'This checks acquisition, not scientific drought skill or raster readiness.','']
-    lines.extend(f'- {"PASS" if c["passed"] else "FAIL"}: {c["check"]}' for c in checks)
-    lines.extend(['','## Outstanding processing gates','']+[f'- {x}' for x in report.get('outstanding',[])])
-    (output/'download_validation.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     if not report['passed']:
         raise DroughtAcquisitionError(f'Download validation failed. Review {report_path}')
     return report

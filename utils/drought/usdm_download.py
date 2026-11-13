@@ -1,7 +1,6 @@
 """Execute a USDM acquisition plan; never infer drought from missing files."""
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 import shutil
 import uuid
@@ -9,10 +8,10 @@ from urllib.parse import urlencode
 
 from .usdm_archive import inspect_zip
 from .usdm_catalog import CATALOG_URL, parse_catalog
-from .usdm_common import (DroughtAcquisitionError, VERSION, protect_source, publish_csv_table,
-                          read_json, sha256, utc_now, write_csv, write_json)
+from .usdm_common import (DroughtAcquisitionError, VERSION, protect_source, normalized_writer,
+                          read_json, sha256, utc_now, write_json)
 from .usdm_http import HttpCache
-from .usdm_statistics import (QC_FIELDS, QC_SCHEMA, STAT_FIELDS, STAT_SCHEMA,
+from .usdm_statistics import (QC_SCHEMA, STAT_SCHEMA,
                              compare_state_formats, normalize_payload, qc, statistic_jobs)
 
 
@@ -35,7 +34,7 @@ def validate_plan(plan):
 
 def fetch_drought_data(download_plan, cache_folder, output_folder, resume=True,
                        publish_tables=False, progress=None, cancelled=None,
-                       http_cache=None, offline=False):
+                       http_cache=None, offline=False, export_csv=False):
     plan_path = Path(download_plan).expanduser().resolve()
     plan = read_json(plan_path)
     validate_plan(plan)
@@ -59,7 +58,8 @@ def fetch_drought_data(download_plan, cache_folder, output_folder, resume=True,
     write_json(manifest_path,manifest)
     warnings = []
     canonical = output/'statistics_canonical.csv'
-    partial_csv = output/'statistics_canonical.csv.part'
+    statistics = str(output/'drought_acquisition.gdb/statistics') if publish_tables else str(canonical)
+    qc_table = str(output/'drought_acquisition.gdb/acquisition_qc') if publish_tables else str(output/'acquisition_qc.csv')
     state = {}
     roles = {row['MAP_DATE']:row['ROLE'] for row in plan['weeks']}
 
@@ -127,9 +127,7 @@ def fetch_drought_data(download_plan, cache_folder, output_folder, resume=True,
                 note(f'GIS archives verified: {index}/{total}')
                 write_json(manifest_path,manifest)
         normalized_rows = 0
-        with partial_csv.open('w',newline='',encoding='utf-8') as stream:
-            writer = csv.DictWriter(stream,STAT_FIELDS)
-            writer.writeheader()
+        with normalized_writer(statistics, STAT_SCHEMA, publish_tables) as write_rows:
             for job in statistic_jobs(plan):
                 check_cancel()
                 url = job['endpoint']+'?'+urlencode(job['params'])
@@ -137,7 +135,7 @@ def fetch_drought_data(download_plan, cache_folder, output_folder, resume=True,
                 payload = read_json(receipt['path'])
                 rows,issues,seen,counts = normalize_payload(payload,job,roles,receipt['sha256'])
                 warnings.extend(issues)
-                writer.writerows(rows)
+                write_rows(rows)
                 normalized_rows += len(rows)
                 if job['kind']!='municipio':
                     label = 'dsci' if job['kind']=='dsci' else str(job['format'])
@@ -149,16 +147,22 @@ def fetch_drought_data(download_plan, cache_folder, output_folder, resume=True,
                 note(f'Statistics verified: {job["id"]} ({len(seen)} geography/date records)')
                 write_json(manifest_path,manifest)
         warnings.extend(compare_state_formats(state))
-        partial_csv.replace(canonical)
-        qc_csv = write_csv(output/'acquisition_qc.csv',QC_FIELDS,warnings)
-        statistics = (publish_csv_table(canonical,output/'drought_acquisition.gdb','statistics',STAT_SCHEMA)
-                      if publish_tables else str(canonical))
-        qc_table = (publish_csv_table(qc_csv,output/'drought_acquisition.gdb','acquisition_qc',QC_SCHEMA)
-                    if publish_tables else qc_csv)
+        with normalized_writer(qc_table, QC_SCHEMA, publish_tables) as write_rows:
+            write_rows(warnings)
+        canonical_export = qc_export = None
+        if publish_tables and export_csv:
+            import arcpy
+            with arcpy.EnvManager(overwriteOutput=True):
+                arcpy.conversion.ExportTable(statistics, str(canonical))
+                arcpy.conversion.ExportTable(qc_table, str(output/'acquisition_qc.csv'))
+            canonical_export, qc_export = str(canonical), str(output/'acquisition_qc.csv')
+        elif not publish_tables:
+            canonical_export, qc_export = statistics, qc_table
         manifest.update(status='complete',acquisition_status='COMPLETE',
             reference_qc_status='WARNINGS' if warnings else 'PASS',completed_utc=utc_now(),
-            statistics=statistics,qc=qc_table,canonical_csv=str(canonical),qc_csv=qc_csv,
-            canonical_sha256=sha256(canonical),qc_sha256=sha256(qc_csv),
+            statistics=statistics,qc=qc_table,canonical_csv=canonical_export,qc_csv=qc_export,
+            canonical_sha256=sha256(canonical_export) if canonical_export else None,
+            qc_sha256=sha256(qc_export) if qc_export else None,
             normalized_rows=normalized_rows,warnings=warnings,
             baseline_gis_count=sum(e['role']=='BASELINE' for e in manifest['gis']),
             buffer_gis_count=sum(e['role']!='BASELINE' for e in manifest['gis']),
