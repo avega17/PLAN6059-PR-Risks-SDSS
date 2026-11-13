@@ -12,29 +12,29 @@ import sys
 
 
 def prepare_hurricane_data(*args, **kwargs):
-    from utils.ibtracs import prepare_hurricane_data as prepare
+    from utils.hurricane.ibtracs import prepare_hurricane_data as prepare
     return prepare(*args, **kwargs)
 
 
 def establish_reference_grid(*args, **kwargs):
-    from utils.grid import establish_reference_grid as establish
+    from utils.shared.grid import establish_reference_grid as establish
     return establish(*args, **kwargs)
 
 
 def validate_prototype(*args, **kwargs):
-    from utils.validation import validate_prototype as validate
+    from utils.hurricane.validation import validate_prototype as validate
     return validate(*args, **kwargs)
 
 
 def run_prototype(raw_points, output_folder, start_season=1955, end_season=2025,
-                  raw_lines=None, spc_reports=None, boundary=None):
+                  raw_lines=None, spc_reports=None, boundary=None, grid_folder=None, export_csv=False):
     """Run the same three callable stages that are exposed in ModelBuilder."""
     root = Path(output_folder).expanduser().resolve()
     prepared = prepare_hurricane_data(
-        raw_points, root / 'prepare', start_season, end_season, raw_lines, spc_reports)
-    grid = establish_reference_grid(root / 'grid', boundary=boundary)
+        raw_points, root / 'data', start_season, end_season, raw_lines, spc_reports, export_csv)
+    grid = establish_reference_grid(grid_folder or Path(__file__).resolve().parent / 'output/shared/grid', boundary=boundary)
     validation = validate_prototype(
-        prepared['manifest'], grid['grid_spec_path'], root / 'validation')
+        prepared['manifest'], grid['grid_spec_path'], root / 'reports')
     return {'prepare_manifest': prepared['manifest'],
             'grid_spec': grid['grid_spec_path'], 'validation': validation}
 
@@ -46,20 +46,22 @@ def build_parser():
         cmd = sub.add_parser(name, help='Prepare observations' if name == 'prepare'
                              else 'Run preparation, grid creation, and validation')
         cmd.add_argument('--raw-points', required=True)
-        cmd.add_argument('--output-folder', required=True)
+        cmd.add_argument('--output-folder', default='output/hurricane' if name == 'run' else 'output/hurricane/data')
+        cmd.add_argument('--export-csv', action='store_true')
         cmd.add_argument('--start-season', type=int, default=1955)
         cmd.add_argument('--end-season', type=int, default=2025)
         cmd.add_argument('--raw-lines')
         cmd.add_argument('--spc-reports')
         if name == 'run':
             cmd.add_argument('--boundary')
+            cmd.add_argument('--grid-folder', default='output/shared/grid')
     grid = sub.add_parser('grid', help='Create the provisional 250 m reference grid')
-    grid.add_argument('--output-folder', required=True)
+    grid.add_argument('--output-folder', default='output/shared/grid')
     grid.add_argument('--boundary')
     validation = sub.add_parser('validate', help='Verify actual preparation and grid outputs')
     validation.add_argument('--prepare-manifest', required=True)
     validation.add_argument('--grid-spec', required=True)
-    validation.add_argument('--output-folder', required=True)
+    validation.add_argument('--output-folder', default='output/hurricane/reports')
     return parser
 
 

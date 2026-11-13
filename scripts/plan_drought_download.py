@@ -14,7 +14,6 @@ def main():
             True if include is None else bool(include),
             int(arcpy.GetParameterAsText(5) or 3),arcpy.GetParameterAsText(6) or 'Baseline',True)
         arcpy.SetParameterAsText(7,result['plan'])
-        arcpy.SetParameterAsText(8,result['expected_weeks'])
         arcpy.AddMessage(f'Planned {result["baseline_count"]} baseline dates; buffers are separate.')
     except Exception as error:
         arcpy.AddError(str(error))

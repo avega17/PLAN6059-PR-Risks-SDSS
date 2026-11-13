@@ -16,6 +16,7 @@ import pathlib
 import re
 import shutil
 import struct
+import tempfile
 
 
 UTC = dt.timezone.utc
@@ -52,7 +53,7 @@ def parse_utc(value):
 
 
 def is_hurricane_status(status):
-    """NATURE=TS is tropical, not tropical-storm intensity; ET is extrapolated."""
+    """NATURE=TS is tropical; USA_STATUS=ET is extrapolated."""
     return str(status or "").strip().upper() in {"HU", "HR", "TY", "ST"}
 
 
@@ -304,7 +305,7 @@ def _stage(source, output, name):
         staged_hash = _hash(target)
         if source_hash != staged_hash:
             raise RuntimeError(f"Staging checksum mismatch: {component}")
-        inventory.append({"source": str(component), "staged": str(target),
+        inventory.append({"source": str(component), "safe_basename": target.name,
                           "size_bytes": component.stat().st_size, "sha256": source_hash})
     return folder / (name + ".shp"), inventory
 
@@ -390,10 +391,10 @@ def _publish_qc(arcpy, path, records):
 
 
 def prepare_hurricane_data(raw_points, output_folder, start_season=1955,
-                           end_season=2025, raw_lines=None, spc_reports=None):
-    """Stage sources and publish observations, event/QC tables, CSV and provenance.
+                           end_season=2025, raw_lines=None, spc_reports=None, export_csv=False):
+    """Temporarily stage sources; publish observations, event/QC tables and provenance.
 
-    The CSV contains every raw point row, its original DBF cells and disposition;
+    The optional CSV contains every raw point row, original DBF cells and disposition;
     the prepared FC contains selected, non-quarantined observations only. Exact
     duplicates are removed from that FC; conflicting SID/time duplicates publish
     QC and a failed manifest, then raise ValueError. No AOI clipping is performed.
@@ -415,159 +416,154 @@ def prepare_hurricane_data(raw_points, output_folder, start_season=1955,
         if not source.is_file():
             raise ValueError(f"Source does not exist: {source}")
     output.mkdir(parents=True, exist_ok=True)
-    inventory_sources, staged = {}, {}
-    for kind, source in sources.items():
-        staged[kind], inventory_sources[kind] = _stage(source, output, "ibtracs_" + kind if kind != "spc_reports" else kind)
-    dataset_metadata = {kind: _source_metadata(arcpy, path, kind) for kind, path in staged.items()}
-    _require_point_geometry(dataset_metadata["points"]["geometry_type"])
-    fields, records, source_count = _read_dbf(staged["points"].with_suffix(".dbf"))
-    geometries = _geometry_records(staged["points"])
-    if len(geometries) != source_count:
-        raise ValueError("Shapefile and DBF record counts differ")
-    required = {"SID", "SEASON", "ISO_TIME", "TRACK_TYPE", "IFLAG", "USA_LAT", "USA_LON", "USA_WIND"}
-    missing = required - {field["name"] for field in fields}
-    if missing:
-        raise ValueError("Missing required source fields: " + ", ".join(sorted(missing)))
-    for record in records:
-        geometry = geometries[record["source_oid"]]
-        record["geometry_hash"] = geometry["hash"]
-        record["raw_geometry_xy"] = geometry["xy"]
-    records = classify_records(records, start_season, end_season)
-    included = [record for record in records if record["row_status"] == "INCLUDED"]
-    statuses = collections.Counter(record["row_status"] for record in records)
-    sentinel_counts = collections.Counter(field for record in records for field, reason in record["normalization_reasons"].items() if reason == "sentinel")
-    selected = [record for record in records if record["row_status"] in {"INCLUDED", "QUARANTINED", "DUPLICATE_EXACT", "CONFLICT"}]
-    summary = {"source_record_count": source_count, "source_active_rows": len(records),
-               "source_deleted_rows": source_count - len(records), "row_status_counts": dict(statuses),
-               "selected_observation_count": len(included), "selected_storm_count": len({r["attributes"]["SID"] for r in included}),
-               "start_season": int(start_season), "end_season": int(end_season),
-               "source_track_types": dict(collections.Counter(str(r["attributes"].get("TRACK_TYPE")) for r in records)),
-               "source_usa_iflag": dict(collections.Counter(r["usa_iflag"] for r in records)),
-               "source_agencies_included": dict(collections.Counter(str(r["attributes"].get("USA_AGENCY") or "") for r in included)),
-               "usa_iflag_included": dict(collections.Counter(r["usa_iflag"] for r in included)),
-               "usa_status_included": dict(collections.Counter(str(r["attributes"].get("USA_STATUS") or "") for r in included)),
-               "nature_included": dict(collections.Counter(str(r["attributes"].get("NATURE") or "") for r in included)),
-               "unavailable_usa_iflag_included": sum(r["usa_iflag"] == "?" for r in included),
-               "missing_usa_wind_included": sum(r["values"].get("USA_WIND") is None for r in included),
-               "missing_agency_included": sum(not r["attributes"].get("USA_AGENCY") for r in included),
-               "sentinel_counts_all_raw_rows": dict(sentinel_counts),
-               "incomplete_radii_included": {str(speed): sum(f"INCOMPLETE_R{speed}" in r["qc_flags"] for r in included) for speed in (34, 50, 64)},
-               "selected_rows_before_qc": len(selected)}
-    if dataset_metadata["points"]["coordinate_reference_system"]["wkid"] == 4326:
-        summary["raw_geometry_vs_usa_positions_included"] = _coordinate_differences(included)
-    else:
-        summary["raw_geometry_vs_usa_positions_included"] = {"compared_observations": 0,
-            "reason": "Raw geometry is not WGS84; no untransformed coordinate comparison was made"}
-    gdb = output / "hurricane_prepare.gdb"
-    paths = {"geodatabase": str(gdb), "raw_points": str(gdb / "raw_ibtracs_points"),
-             "observations": str(gdb / "hurricane_observations"), "storms": str(gdb / "hurricane_storms"),
-             "qc": str(gdb / "hurricane_qc"), "staged_points": str(staged["points"]),
-             "canonical_csv": str(output / "hurricane_observations.csv"),
-             "inventory": str(output / "source_inventory.json"),
-             "audit_markdown": str(output / "hurricane_data_audit.md"),
-             "manifest": str(output / "prepare_manifest.json")}
-    inventory = {"created_utc": dt.datetime.now(UTC).isoformat(), "sources": inventory_sources,
-                 "datasets": dataset_metadata,
-                 "source_fields": fields, "geometry_policy": "Raw geometry is merged LAT/LON; prepared geometry is rebuilt from USA_LON/USA_LAT in EPSG:4326; full tracks retained.",
-                 "native_units": {"wind_and_translation_speed": "knots", "USA_radii_RMW_ROCI_EYE": "nautical miles", "pressure": "millibars", "DIST2LAND_LANDFALL": "kilometers", "time": "UTC", "coordinates": "degrees"},
-                 "derived_fields": {"USA_IFLAG": "First character of IFLAG; not a source column", "OBS_TIME_UTC": "ISO_TIME parsed as UTC, stored in ArcGIS DATE without timezone", "SOURCE_OID": "Zero-based original shapefile record index", "QC_FLAGS": "Semicolon-delimited quality indicators"},
-                 "usa_iflag_values": IFLAG_DESCRIPTIONS, "summary": summary,
-                 "sources_documentation": [TECHNICAL_DETAILS, COLUMN_DETAILS, SPC_DETAILS],
-                 "limitations": ["Best tracks are uncertain estimates; native positional reporting approximately 0.1 degree (~10 km).", "Prepared winds are storm maximum sustained 1-minute wind, not local exposure or gusts.", "Blank agency values are retained, including interpolated observations; no agency attribution is invented.", "SPC severe thunderstorm reports are inventoried separately and never merged into hurricane observations.", "Missing numeric cells and field-specific sentinels become NULL; valid negative status codes and zero radii are retained."]}
-    raw_names = [field["name"] for field in fields]
-    csv_names = raw_names + ["SOURCE_OID", "USA_IFLAG", "OBS_TIME_UTC", "ROW_STATUS", "QC_FLAGS"] + ["NORMALIZED_" + field for field in NORMALIZED_COLUMNS]
-    with pathlib.Path(paths["canonical_csv"]).open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=csv_names)
-        writer.writeheader()
-        for record in records:
-            row = dict(record["raw_attributes"])
-            row.update(SOURCE_OID=record["source_oid"], USA_IFLAG=record["usa_iflag"],
-                       OBS_TIME_UTC=record["observation_time"].isoformat() if record["observation_time"] else "",
-                       ROW_STATUS=record["row_status"], QC_FLAGS=";".join(record["qc_flags"]))
-            row.update({"NORMALIZED_" + field: record["values"].get(field) for field in NORMALIZED_COLUMNS})
-            writer.writerow(row)
-    with arcpy.EnvManager(extent=None, mask=None, outputCoordinateSystem=arcpy.SpatialReference(4326), overwriteOutput=True):
-        if not arcpy.Exists(str(gdb)):
-            arcpy.management.CreateFileGDB(str(output), gdb.name)
-        arcpy.management.CopyFeatures(str(staged["points"]), paths["raw_points"])
-        _publish_qc(arcpy, pathlib.Path(paths["qc"]), records)
-        if statuses.get("CONFLICT"):
-            for key in ("observations", "storms"):
-                if arcpy.Exists(paths[key]):
-                    arcpy.management.Delete(paths[key])
-            inventory["status"] = "failed_conflicting_duplicates"
-            _write_json(pathlib.Path(paths["inventory"]), inventory)
-            _write_json(pathlib.Path(paths["manifest"]), dict(paths, summary=summary, status=inventory["status"]))
-            raise ValueError(f"Conflicting SID/timestamp observations; review {paths['qc']} and {paths['canonical_csv']}")
-        observations = pathlib.Path(paths["observations"])
-        if arcpy.Exists(str(observations)):
-            arcpy.management.Delete(str(observations))
-        arcpy.management.CreateFeatureclass(str(gdb), observations.name, "POINT", spatial_reference=arcpy.SpatialReference(4326))
-        definitions = []
-        field_map = {}
-        for field in fields:
-            name = field["name"]
-            safe_name = arcpy.ValidateFieldName(name, str(gdb))
-            field_map[name] = safe_name
-            if field["dbf_type"] in {"N", "F"}:
-                kind = "LONG" if field["decimals"] == 0 and field["length"] <= 9 else "DOUBLE"
-                definitions.append((safe_name, kind, None))
+    with tempfile.TemporaryDirectory(prefix="sdss_hurricane_") as staging_root:
+        try:
+            inventory_sources, staged = {}, {}
+            for kind, source in sources.items():
+                staged[kind], inventory_sources[kind] = _stage(source, pathlib.Path(staging_root), "ibtracs_" + kind if kind != "spc_reports" else kind)
+            dataset_metadata = {kind: _source_metadata(arcpy, path, kind) for kind, path in staged.items()}
+            _require_point_geometry(dataset_metadata["points"]["geometry_type"])
+            fields, records, source_count = _read_dbf(staged["points"].with_suffix(".dbf"))
+            geometries = _geometry_records(staged["points"])
+            if len(geometries) != source_count:
+                raise ValueError("Shapefile and DBF record counts differ")
+            required = {"SID", "SEASON", "ISO_TIME", "TRACK_TYPE", "IFLAG", "USA_LAT", "USA_LON", "USA_WIND"}
+            missing = required - {field["name"] for field in fields}
+            if missing:
+                raise ValueError("Missing required source fields: " + ", ".join(sorted(missing)))
+            for record in records:
+                geometry = geometries[record["source_oid"]]
+                record["geometry_hash"] = geometry["hash"]
+                record["raw_geometry_xy"] = geometry["xy"]
+            records = classify_records(records, start_season, end_season)
+            included = [record for record in records if record["row_status"] == "INCLUDED"]
+            statuses = collections.Counter(record["row_status"] for record in records)
+            sentinel_counts = collections.Counter(field for record in records for field, reason in record["normalization_reasons"].items() if reason == "sentinel")
+            selected = [record for record in records if record["row_status"] in {"INCLUDED", "QUARANTINED", "DUPLICATE_EXACT", "CONFLICT"}]
+            summary = {"source_record_count": source_count, "source_active_rows": len(records),
+                       "source_deleted_rows": source_count - len(records), "row_status_counts": dict(statuses),
+                       "selected_observation_count": len(included), "selected_storm_count": len({r["attributes"]["SID"] for r in included}),
+                       "start_season": int(start_season), "end_season": int(end_season),
+                       "source_track_types": dict(collections.Counter(str(r["attributes"].get("TRACK_TYPE")) for r in records)),
+                       "source_usa_iflag": dict(collections.Counter(r["usa_iflag"] for r in records)),
+                       "source_agencies_included": dict(collections.Counter(str(r["attributes"].get("USA_AGENCY") or "") for r in included)),
+                       "usa_iflag_included": dict(collections.Counter(r["usa_iflag"] for r in included)),
+                       "usa_status_included": dict(collections.Counter(str(r["attributes"].get("USA_STATUS") or "") for r in included)),
+                       "nature_included": dict(collections.Counter(str(r["attributes"].get("NATURE") or "") for r in included)),
+                       "unavailable_usa_iflag_included": sum(r["usa_iflag"] == "?" for r in included),
+                       "missing_usa_wind_included": sum(r["values"].get("USA_WIND") is None for r in included),
+                       "missing_agency_included": sum(not r["attributes"].get("USA_AGENCY") for r in included),
+                       "sentinel_counts_all_raw_rows": dict(sentinel_counts),
+                       "incomplete_radii_included": {str(speed): sum(f"INCOMPLETE_R{speed}" in r["qc_flags"] for r in included) for speed in (34, 50, 64)},
+                       "selected_rows_before_qc": len(selected)}
+            if dataset_metadata["points"]["coordinate_reference_system"]["wkid"] == 4326:
+                summary["raw_geometry_vs_usa_positions_included"] = _coordinate_differences(included)
             else:
-                definitions.append((safe_name, "TEXT", max(1, field["length"])))
-        definitions += [("SOURCE_OID", "LONG", None), ("USA_IFLAG", "TEXT", 1), ("OBS_TIME_UTC", "DATE", None), ("QC_FLAGS", "TEXT", 4000)]
-        _add_fields(arcpy, observations, definitions)
-        insert_fields = [field_map[name] for name in raw_names] + ["SOURCE_OID", "USA_IFLAG", "OBS_TIME_UTC", "QC_FLAGS", "SHAPE@XY"]
-        with arcpy.da.InsertCursor(str(observations), insert_fields) as cursor:
-            for record in included:
-                values = record["values"]
-                attrs = [values[name] for name in raw_names]
-                cursor.insertRow(attrs + [record["source_oid"], record["usa_iflag"], record["observation_time"].replace(tzinfo=None),
-                                          ";".join(record["qc_flags"]), (values["USA_LON"], values["USA_LAT"])])
-        storms_path = pathlib.Path(paths["storms"])
-        if arcpy.Exists(str(storms_path)):
-            arcpy.management.Delete(str(storms_path))
-        arcpy.management.CreateTable(str(gdb), storms_path.name)
-        storm_definitions = [("SID", "TEXT", 32), ("SEASON", "LONG", None), ("NAME", "TEXT", 80),
-                             ("OBS_COUNT", "LONG", None), ("FIRST_UTC", "DATE", None), ("LAST_UTC", "DATE", None),
-                             ("MAX_USA_WIND_KT", "DOUBLE", None), ("MISSING_WIND_N", "LONG", None),
-                             ("R34_COMPLETE_N", "LONG", None), ("R64_COMPLETE_N", "LONG", None),
-                             ("USA_POS_INTERP_N", "LONG", None)]
-        _add_fields(arcpy, storms_path, storm_definitions)
-        groups = collections.defaultdict(list)
-        for record in included:
-            groups[record["attributes"]["SID"]].append(record)
-        with arcpy.da.InsertCursor(str(storms_path), [field[0] for field in storm_definitions]) as cursor:
-            for sid, rows in sorted(groups.items()):
-                first = min(rows, key=lambda row: row["observation_time"])
-                times = [row["observation_time"].replace(tzinfo=None) for row in rows]
-                winds = [row["values"]["USA_WIND"] for row in rows if row["values"].get("USA_WIND") is not None]
-                cursor.insertRow((sid, first["attributes"]["SEASON"], first["attributes"].get("NAME"), len(rows), min(times), max(times),
-                                  max(winds) if winds else None, len(rows) - len(winds),
-                                  sum("INCOMPLETE_R34" not in row["qc_flags"] for row in rows),
-                                  sum("INCOMPLETE_R64" not in row["qc_flags"] for row in rows),
-                                  sum(row["usa_iflag"] == "P" for row in rows)))
-    # Verify source checksums after all processing; staging must never edit raw data.
-    for components in inventory_sources.values():
-        for component in components:
-            if _hash(pathlib.Path(component["source"])) != component["sha256"]:
-                raise RuntimeError("Raw source changed during processing: " + component["source"])
-    inventory["prepared_field_map"] = field_map
-    inventory["status"] = "complete"
-    inventory["arcgis_installation"] = arcpy.GetInstallInfo()
-    _write_json(pathlib.Path(paths["inventory"]), inventory)
-    audit = ["# Hurricane data preparation audit", "", f"Generated {inventory['created_utc']}", "",
-             f"Raw point records: {source_count:,}. Prepared observations: {len(included):,}; storms: {len(groups):,}.",
-             f"Selection: main tracks, seasons {start_season} through {end_season}, full tracks with no extent clipping.", "",
-             "## Quality results", "", "```json", json.dumps(summary, indent=2), "```", "",
-             "## Interpretation", ""] + ["- " + item for item in inventory["limitations"]]
-    audit += ["", "Prepared point geometry uses USA positions; the raw geodatabase copy preserves the merged geometry.",
-              "The canonical CSV preserves every original DBF cell, with normalized core columns and row disposition.", "",
-              "## Prepared field mapping", "", "| Source field | Prepared field |", "|---|---|"]
-    audit += [f"| {source} | {target} |" for source, target in field_map.items()]
-    audit += ["",
-              "## Sources", "", "- " + TECHNICAL_DETAILS, "- " + COLUMN_DETAILS, "- " + SPC_DETAILS, ""]
-    pathlib.Path(paths["audit_markdown"]).write_text("\n".join(audit), encoding="utf-8")
-    result = dict(paths, summary=summary, status="complete")
-    _write_json(pathlib.Path(paths["manifest"]), result)
-    arcpy.AddMessage(f"Prepared {len(included):,} observations across {len(groups):,} storms. Manifest: {paths['manifest']}")
-    return result
+                summary["raw_geometry_vs_usa_positions_included"] = {"compared_observations": 0,
+                    "reason": "Raw geometry is not WGS84; no untransformed coordinate comparison was made"}
+            gdb = output / "hurricane_prepare.gdb"
+            paths = {"geodatabase": str(gdb), "raw_points": str(gdb / "raw_ibtracs_points"),
+                     "observations": str(gdb / "hurricane_observations"), "storms": str(gdb / "hurricane_storms"),
+                     "qc": str(gdb / "hurricane_qc"),
+                     "canonical_csv": str(output / "hurricane_observations.csv") if export_csv else None,
+                     "inventory": str(output / "source_inventory.json"),
+                     "manifest": str(output / "prepare_manifest.json")}
+            inventory = {"created_utc": dt.datetime.now(UTC).isoformat(), "sources": inventory_sources,
+                         "datasets": dataset_metadata,
+                         "staging_policy": "Temporary safe-name sidecars, verified before ArcPy import and removed on exit; original checksums retained",
+                         "source_fields": fields, "geometry_policy": "Raw geometry is merged LAT/LON; prepared geometry is rebuilt from USA_LON/USA_LAT in EPSG:4326; full tracks retained.",
+                         "native_units": {"wind_and_translation_speed": "knots", "USA_radii_RMW_ROCI_EYE": "nautical miles", "pressure": "millibars", "DIST2LAND_LANDFALL": "kilometers", "time": "UTC", "coordinates": "degrees"},
+                         "derived_fields": {"USA_IFLAG": "First character of IFLAG; not a source column", "OBS_TIME_UTC": "ISO_TIME parsed as UTC, stored in ArcGIS DATE without timezone", "SOURCE_OID": "Zero-based original shapefile record index", "QC_FLAGS": "Semicolon-delimited quality indicators"},
+                         "usa_iflag_values": IFLAG_DESCRIPTIONS, "summary": summary,
+                         "sources_documentation": [TECHNICAL_DETAILS, COLUMN_DETAILS, SPC_DETAILS],
+                         "limitations": ["Best tracks are uncertain estimates; native positional reporting approximately 0.1 degree (~10 km).", "Prepared winds are storm maximum sustained 1-minute wind, not local exposure or gusts.", "Blank agency values are retained, including interpolated observations; no agency attribution is invented.", "SPC severe thunderstorm reports are inventoried separately and never merged into hurricane observations.", "Missing numeric cells and field-specific sentinels become NULL; valid negative status codes and zero radii are retained."]}
+            raw_names = [field["name"] for field in fields]
+            csv_names = raw_names + ["SOURCE_OID", "USA_IFLAG", "OBS_TIME_UTC", "ROW_STATUS", "QC_FLAGS"] + ["NORMALIZED_" + field for field in NORMALIZED_COLUMNS]
+            if export_csv:
+                with pathlib.Path(paths["canonical_csv"]).open("w", newline="", encoding="utf-8") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=csv_names)
+                    writer.writeheader()
+                    for record in records:
+                        row = dict(record["raw_attributes"])
+                        row.update(SOURCE_OID=record["source_oid"], USA_IFLAG=record["usa_iflag"],
+                                   OBS_TIME_UTC=record["observation_time"].isoformat() if record["observation_time"] else "",
+                                   ROW_STATUS=record["row_status"], QC_FLAGS=";".join(record["qc_flags"]))
+                        row.update({"NORMALIZED_" + field: record["values"].get(field) for field in NORMALIZED_COLUMNS})
+                        writer.writerow(row)
+            with arcpy.EnvManager(extent=None, mask=None, outputCoordinateSystem=arcpy.SpatialReference(4326), overwriteOutput=True):
+                if not arcpy.Exists(str(gdb)):
+                    arcpy.management.CreateFileGDB(str(output), gdb.name)
+                arcpy.management.CopyFeatures(str(staged["points"]), paths["raw_points"])
+                _publish_qc(arcpy, pathlib.Path(paths["qc"]), records)
+                if statuses.get("CONFLICT"):
+                    for key in ("observations", "storms"):
+                        if arcpy.Exists(paths[key]):
+                            arcpy.management.Delete(paths[key])
+                    inventory["status"] = "failed_conflicting_duplicates"
+                    _write_json(pathlib.Path(paths["inventory"]), inventory)
+                    _write_json(pathlib.Path(paths["manifest"]), dict(paths, summary=summary, status=inventory["status"]))
+                    raise ValueError(f"Conflicting SID/timestamp observations; review {paths['qc']}")
+                observations = pathlib.Path(paths["observations"])
+                if arcpy.Exists(str(observations)):
+                    arcpy.management.Delete(str(observations))
+                arcpy.management.CreateFeatureclass(str(gdb), observations.name, "POINT", spatial_reference=arcpy.SpatialReference(4326))
+                definitions = []
+                field_map = {}
+                for field in fields:
+                    name = field["name"]
+                    safe_name = arcpy.ValidateFieldName(name, str(gdb))
+                    field_map[name] = safe_name
+                    if field["dbf_type"] in {"N", "F"}:
+                        kind = "LONG" if field["decimals"] == 0 and field["length"] <= 9 else "DOUBLE"
+                        definitions.append((safe_name, kind, None))
+                    else:
+                        definitions.append((safe_name, "TEXT", max(1, field["length"])))
+                definitions += [("SOURCE_OID", "LONG", None), ("USA_IFLAG", "TEXT", 1), ("OBS_TIME_UTC", "DATE", None), ("QC_FLAGS", "TEXT", 4000)]
+                _add_fields(arcpy, observations, definitions)
+                insert_fields = [field_map[name] for name in raw_names] + ["SOURCE_OID", "USA_IFLAG", "OBS_TIME_UTC", "QC_FLAGS", "SHAPE@XY"]
+                with arcpy.da.InsertCursor(str(observations), insert_fields) as cursor:
+                    for record in included:
+                        values = record["values"]
+                        attrs = [values[name] for name in raw_names]
+                        cursor.insertRow(attrs + [record["source_oid"], record["usa_iflag"], record["observation_time"].replace(tzinfo=None),
+                                                  ";".join(record["qc_flags"]), (values["USA_LON"], values["USA_LAT"])])
+                storms_path = pathlib.Path(paths["storms"])
+                if arcpy.Exists(str(storms_path)):
+                    arcpy.management.Delete(str(storms_path))
+                arcpy.management.CreateTable(str(gdb), storms_path.name)
+                storm_definitions = [("SID", "TEXT", 32), ("SEASON", "LONG", None), ("NAME", "TEXT", 80),
+                                     ("OBS_COUNT", "LONG", None), ("FIRST_UTC", "DATE", None), ("LAST_UTC", "DATE", None),
+                                     ("MAX_USA_WIND_KT", "DOUBLE", None), ("MISSING_WIND_N", "LONG", None),
+                                     ("R34_COMPLETE_N", "LONG", None), ("R64_COMPLETE_N", "LONG", None),
+                                     ("USA_POS_INTERP_N", "LONG", None)]
+                _add_fields(arcpy, storms_path, storm_definitions)
+                groups = collections.defaultdict(list)
+                for record in included:
+                    groups[record["attributes"]["SID"]].append(record)
+                with arcpy.da.InsertCursor(str(storms_path), [field[0] for field in storm_definitions]) as cursor:
+                    for sid, rows in sorted(groups.items()):
+                        first = min(rows, key=lambda row: row["observation_time"])
+                        times = [row["observation_time"].replace(tzinfo=None) for row in rows]
+                        winds = [row["values"]["USA_WIND"] for row in rows if row["values"].get("USA_WIND") is not None]
+                        cursor.insertRow((sid, first["attributes"]["SEASON"], first["attributes"].get("NAME"), len(rows), min(times), max(times),
+                                          max(winds) if winds else None, len(rows) - len(winds),
+                                          sum("INCOMPLETE_R34" not in row["qc_flags"] for row in rows),
+                                          sum("INCOMPLETE_R64" not in row["qc_flags"] for row in rows),
+                                          sum(row["usa_iflag"] == "P" for row in rows)))
+            # Verify source checksums after all processing; staging must never edit raw data.
+            for components in inventory_sources.values():
+                for component in components:
+                    if _hash(pathlib.Path(component["source"])) != component["sha256"]:
+                        raise RuntimeError("Raw source changed during processing: " + component["source"])
+            inventory["prepared_field_map"] = field_map
+            inventory["status"] = "complete"
+            inventory["arcgis_installation"] = arcpy.GetInstallInfo()
+            _write_json(pathlib.Path(paths["inventory"]), inventory)
+            result = dict(paths, summary=summary, status="complete")
+            _write_json(pathlib.Path(paths["manifest"]), result)
+            arcpy.AddMessage(f"Prepared {len(included):,} observations across {len(groups):,} storms. Manifest: {paths['manifest']}")
+            return result
+        finally:
+            # Script Tool execution can retain a schema lock on staged shapefiles.
+            # Release it before TemporaryDirectory removes them, even on errors.
+            arcpy.management.ClearWorkspaceCache()

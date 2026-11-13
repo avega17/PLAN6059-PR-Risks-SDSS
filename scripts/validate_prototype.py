@@ -13,10 +13,8 @@ def main():
                                     arcpy.GetParameterAsText(1),
                                     arcpy.GetParameterAsText(2))
         arcpy.SetParameterAsText(3, result['report'])
-        arcpy.SetParameter(4, result['passed'])
         arcpy.AddMessage('Prototype validation passed. See the report for checks and limitations.')
     except Exception as error:
-        arcpy.SetParameter(4, False)
         arcpy.AddError(str(error))
         raise
 

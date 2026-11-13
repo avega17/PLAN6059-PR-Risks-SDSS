@@ -1,4 +1,4 @@
-"""ArcGIS Script Tool adapter. Parameter order: docs/modelbuilder_setup.md."""
+"""ArcGIS Script Tool adapter. Parameter order: docs/hurricane_modelbuilder_setup.md."""
 from pathlib import Path
 import sys
 
@@ -14,9 +14,10 @@ def main():
             int(arcpy.GetParameterAsText(2) or 1955),
             int(arcpy.GetParameterAsText(3) or 2025),
             arcpy.GetParameterAsText(4) or None,
-            arcpy.GetParameterAsText(5) or None)
+            arcpy.GetParameterAsText(5) or None,
+            export_csv=bool(arcpy.GetParameter(6)))
         for index, key in enumerate(
-                ('observations', 'storms', 'qc', 'canonical_csv', 'inventory', 'manifest'), 6):
+                ('observations', 'manifest'), 7):
             arcpy.SetParameterAsText(index, result[key])
         arcpy.AddMessage('Preparation complete. These are storm observations, not local wind estimates.')
     except Exception as error:

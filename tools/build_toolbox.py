@@ -11,6 +11,7 @@ Rebuilding preserves other archive members and manually authored model tools.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 import zipfile
@@ -18,100 +19,11 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ALIAS = 'prrisks'
+import sys
+sys.path.insert(0, str(ROOT))
 
 
-def parameter(name, label, datatype, description, *, optional=False,
-              output=False, extensions=None, polygon=False, default=None, choices=None):
-    return dict(name=name, label=label, datatype=datatype,
-                description=description, optional=optional, output=output,
-                extensions=extensions, polygon=polygon, default=default, choices=choices)
-
-
-TOOLS = [
-    dict(name='PrepareHurricaneData', label='Prepare Hurricane Data',
-         script='prepare_hurricane_data.py',
-         summary='Stage, preserve, audit and prepare USA-coordinate IBTrACS observations; no wind surface or rank is estimated.',
-         params=[
-             parameter('RawPoints', 'Raw Points', 'DEFile', 'Local IBTrACS points .shp; matching .shx, .dbf and .prj sidecars must remain beside it.', extensions=['shp']),
-             parameter('OutputFolder', 'Output Folder', 'DEFolder', 'Existing writable folder for preparation outputs. Use a separate folder from source datasets.'),
-             parameter('StartSeason', 'Start Season', 'GPLong', 'First included IBTrACS SEASON, inclusive.', optional=True, default=1955),
-             parameter('EndSeason', 'End Season', 'GPLong', 'Last included IBTrACS SEASON, inclusive.', optional=True, default=2025),
-             parameter('RawLines', 'Raw Lines', 'DEFile', 'Optional source track lines for inventory only; never substituted for USA-coordinate observations.', optional=True, extensions=['shp']),
-             parameter('SPCReports', 'SPC Reports', 'DEFile', 'Optional SPC severe-wind reports for separate contextual inventory.', optional=True, extensions=['shp']),
-             parameter('Observations', 'Observations', 'DEFeatureClass', 'Prepared WGS84 observations rebuilt from USA coordinates.', output=True),
-             parameter('Storms', 'Storms', 'DETable', 'Distinct-storm and coverage summary.', output=True),
-             parameter('QC', 'QC', 'DETable', 'Record-level quality and row-disposition evidence.', output=True),
-             parameter('CanonicalCSV', 'Canonical CSV', 'DEFile', 'Portable source rows, normalized core fields and row accounting.', output=True, extensions=['csv']),
-             parameter('Inventory', 'Inventory', 'DEFile', 'Source checksums, schema and provenance inventory.', output=True, extensions=['json']),
-             parameter('PrepareManifest', 'Prepare Manifest', 'DEFile', 'Machine-readable preparation output paths and summary; connect to Validate Prototype.', output=True, extensions=['json']),
-         ]),
-    dict(name='EstablishReferenceGrid', label='Establish Reference Grid',
-         script='establish_reference_grid.py',
-         summary='Create the fixed EPSG:32161 250 m reference and land mask; includes Puerto Rico, Vieques, Culebra and Mona.',
-         params=[
-             parameter('OutputFolder', 'Output Folder', 'DEFolder', 'Existing writable folder for the grid and boundary cache.'),
-             parameter('Boundary', 'Boundary', 'GPFeatureLayer', 'Optional approved polygon boundary. If blank, acquire pinned Natural Earth 5.1.1; its 1:10 million boundary is provisional.', optional=True, polygon=True),
-             parameter('ReferenceRaster', 'Reference Raster', 'DERasterDataset', 'Constant-zero alignment raster over the complete reference rectangle; not a hazard score.', output=True),
-             parameter('StudyMask', 'Study Mask', 'DERasterDataset', 'Land=1 and exterior=NoData, rasterized by cell center.', output=True),
-             parameter('ProjectedBoundary', 'Projected Boundary', 'DEFeatureClass', 'Working boundary projected into EPSG:32161; source is preserved.', output=True),
-             parameter('GridSpec', 'Grid Spec', 'DEFile', 'Exact grid extent, cell size, anchor, paths and provenance; connect to Validate Prototype.', output=True, extensions=['json']),
-             parameter('GridManifest', 'Grid Manifest', 'DEFile', 'Machine-readable boundary and grid manifest.', output=True, extensions=['json']),
-         ]),
-    dict(name='ValidatePrototype', label='Validate Prototype',
-         script='validate_prototype.py',
-         summary='Validate the actual prepared observations and shared grid; this is not scientific wind-model validation.',
-         params=[
-             parameter('PrepareManifest', 'Prepare Manifest', 'DEFile', 'prepare_manifest.json returned by Prepare Hurricane Data.', extensions=['json']),
-             parameter('GridSpec', 'Grid Spec', 'DEFile', 'grid_spec.json returned by Establish Reference Grid.', extensions=['json']),
-             parameter('OutputFolder', 'Output Folder', 'DEFolder', 'Existing writable folder for validation reports.'),
-             parameter('Report', 'Report', 'DEFile', 'JSON checks and evidence; a companion Markdown report is also written.', output=True, extensions=['json']),
-             parameter('Passed', 'Passed', 'GPBoolean', 'True when all prototype checks pass; failed validation raises a tool error.', output=True),
-         ]),
-]
-
-
-VALIDATOR = '''import arcpy
-import os
-
-class ToolValidator:
-    def __init__(self):
-        self.params = arcpy.GetParameterInfo()
-
-    def initializeParameters(self):
-        return
-
-    def updateParameters(self):
-        # Declare deterministic paths so ModelBuilder can validate downstream
-        # required inputs before their files exist. No dataset access or GP.
-        if len(self.params) == 12:
-            folder_index, first_output = 1, 6
-            relative = (
-                'hurricane_prepare.gdb/hurricane_observations',
-                'hurricane_prepare.gdb/hurricane_storms',
-                'hurricane_prepare.gdb/hurricane_qc',
-                'hurricane_observations.csv', 'source_inventory.json',
-                'prepare_manifest.json')
-        elif len(self.params) == 7:
-            folder_index, first_output = 0, 2
-            relative = ('reference250.tif', 'study_mask250.tif',
-                        'grid.gdb/study_boundary32161',
-                        'grid_spec.json', 'grid_manifest.json')
-        else:
-            folder_index, first_output = 2, 3
-            relative = ('validation_report.json',)
-        folder = self.params[folder_index].valueAsText
-        for index, name in enumerate(relative, first_output):
-            self.params[index].value = (
-                os.path.normpath(os.path.join(folder, name)) if folder else None)
-
-    def updateMessages(self):
-        # Only this tool has StartSeason/EndSeason. Do not inspect future
-        # ModelBuilder datasets or run geoprocessing during validation.
-        if len(self.params) == 12:
-            first, last = self.params[2].value, self.params[3].value
-            if first is not None and last is not None and int(first) > int(last):
-                self.params[3].setErrorMessage('End Season must be on or after Start Season.')
-'''
+from tools.toolbox_definitions import HURRICANE_TOOLS as TOOLS, DROUGHT_TOOLS
 
 
 def _parameter_content(spec):
@@ -125,6 +37,8 @@ def _parameter_content(spec):
         content['type'] = 'optional'
     if spec['extensions']:
         content['domain'] = {'type': 'GPFileDomain', 'filetypes': spec['extensions']}
+    if spec.get('choices'):
+        content['domain'] = {'type': 'GPCodedValueDomain', 'items': [{'value': v, 'code': v} for v in spec['choices']]}
     if spec['polygon']:
         content['domain'] = {'type': 'GPFeatureClassDomain', 'geometrytype': ['Polygon']}
     if spec['default'] is not None:
@@ -133,7 +47,7 @@ def _parameter_content(spec):
     return content, resources
 
 
-def build_toolbox(output=ROOT / 'PRRisks.atbx', overwrite=False, *, tools=None,
+def build_toolbox(output=ROOT / 'HurricaneWinds_Model_Toolbox.atbx', overwrite=False, *, tools=None,
                   alias=ALIAS, title=None, description=None):
     """Write deterministic Script Tool definitions with relative source links."""
     tool_specs = TOOLS if tools is None else tools
@@ -169,12 +83,14 @@ def build_toolbox(output=ROOT / 'PRRisks.atbx', overwrite=False, *, tools=None,
         members[folder + 'tool.content.rc'] = json.dumps({'map': resources}, indent=2)
         # ATBX's virtual tool folder is two levels below the external root.
         members[folder + 'tool.script.execute.link'] = '..\\..\\scripts\\' + tool['script']
-        members[folder + 'tool.script.validate.py'] = tool.get('validator',VALIDATOR)
+        members[folder + 'tool.script.validate.py'] = tool['validator']
+    retained_info = {}
     if output.exists():
         # A model saved in Pro is user-authored state. Preserve its archive
         # members, resource labels and toolset references during regeneration.
         with zipfile.ZipFile(output) as previous:
             old_members = {name: previous.read(name) for name in previous.namelist()}
+            old_info = {info.filename: copy.copy(info) for info in previous.infolist()}
         old_content = json.loads(old_members['toolbox.content'])
         old_resource = json.loads(old_members['toolbox.content.rc'])
         known_names = {tool['name'] for tool in tool_specs}
@@ -194,6 +110,7 @@ def build_toolbox(output=ROOT / 'PRRisks.atbx', overwrite=False, *, tools=None,
         known_folders = {name.casefold() + '.tool' for name in known_names}
         old_members = {name: contents for name, contents in old_members.items()
                        if name.split('/', 1)[0].casefold() not in known_folders}
+        retained_info = {name: old_info[name] for name in old_members if name not in members}
         old_members.update({name: text.encode('utf-8') for name, text in members.items()})
         encoded_members = old_members
     else:
@@ -202,9 +119,16 @@ def build_toolbox(output=ROOT / 'PRRisks.atbx', overwrite=False, *, tools=None,
     try:
         with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             for name, contents in encoded_members.items():
-                info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
+                original_info = retained_info.get(name)
+                info = (copy.copy(original_info) if original_info is not None else
+                        zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0)))
+                if original_info is None:
+                    info.compress_type = zipfile.ZIP_DEFLATED
                 archive.writestr(info, contents)
+                if original_info is not None:
+                    # zipfile replaces a zero external_attr during writestr.
+                    # Restore it before the central directory is finalized.
+                    info.external_attr = original_info.external_attr
         temporary.replace(output)
     finally:
         if temporary.exists():
@@ -216,8 +140,11 @@ def verify_toolbox(path, tools=None):
     """Import in ArcGIS Pro and validate the public parameter contracts."""
     import arcpy
 
-    alias = 'prrisksverify'
-    arcpy.ImportToolbox(str(path), alias)
+    with zipfile.ZipFile(path) as archive:
+        alias = json.loads(archive.read('toolbox.content'))['alias']
+    # Overriding the import alias also changes the saved toolbox alias in Pro.
+    # Verify using its declared alias so checks do not alter the deliverable.
+    arcpy.ImportToolbox(str(path))
     result = []
     for tool in (TOOLS if tools is None else tools):
         parameters = arcpy.GetParameterInfo(tool['name'] + '_' + alias)
@@ -244,7 +171,7 @@ def verify_toolbox(path, tools=None):
             expected_default = expected['default']
             default_matches = actual.valueAsText == str(expected_default)
             if expected['datatype']=='GPDate' and expected_default is not None:
-                from utils.usdm_common import as_date
+                from utils.drought.usdm_common import as_date
                 default_matches = as_date(actual.valueAsText)==as_date(expected_default)
             if expected_default is not None and not default_matches:
                 raise ValueError(f"Unexpected default for {tool['name']}.{expected['name']}")
@@ -258,15 +185,19 @@ def verify_toolbox(path, tools=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, default=ROOT / 'PRRisks.atbx')
     parser.add_argument('--overwrite', action='store_true')
-    parser.add_argument('--verify', action='store_true', help='Verify imports/parameter definitions with installed ArcPy.')
+    parser.add_argument('--verify', action='store_true')
     options = parser.parse_args()
-    path = build_toolbox(options.output, options.overwrite)
-    report = {'toolbox': str(path), 'tools': [tool['name'] for tool in TOOLS]}
-    if options.verify:
-        report['verification'] = verify_toolbox(path)
-    print(json.dumps(report, indent=2))
+    for filename, specs, alias, title in (
+        ('HurricaneWinds_Model_Toolbox.atbx', TOOLS, 'prrisks', 'Hurricane Winds'),
+        ('DroughtRisk_Model_Toolbox.atbx', DROUGHT_TOOLS, 'droughtprobe', 'Drought')):
+        path = build_toolbox(ROOT/filename, options.overwrite, tools=specs, alias=alias,
+                             title='Puerto Rico SDSS - ' + title,
+                             description='Three linked Script Tools; scientific hazard estimation is deferred.')
+        report = {'toolbox': str(path)}
+        if options.verify:
+            report['tools'] = verify_toolbox(path, specs)
+        print(json.dumps(report, indent=2))
 
 
 if __name__ == '__main__':

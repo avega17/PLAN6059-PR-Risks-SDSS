@@ -48,13 +48,39 @@ class HttpCache:
         if self.resume and pointer.exists():
             try:
                 old = read_json(pointer)
-                path = Path(old['path'])
+                checksum = str(old['sha256'])
+                if len(checksum) != 64 or any(c not in '0123456789abcdef' for c in checksum):
+                    raise ValueError('Invalid cache content hash')
+                suffix = {'json':'.json','html':'.html','zip':'.zip'}[kind]
+                stored = Path(old['path'])
+                path = stored if stored.is_absolute() else self.folder/stored
+                # Legacy indexes contain the old absolute root. Recover only the
+                # deterministic content-addressed object, never an arbitrary path.
+                expected = self.folder/'objects'/checksum[:2]/(checksum+suffix)
+                if path.resolve() != expected.resolve():
+                    path = expected
                 if not path.resolve().is_relative_to(self.folder):
                     raise ValueError('Cache pointer escapes its root')
-                if path.stat().st_size != old['bytes'] or sha256(path) != old['sha256']:
+                if path.stat().st_size != old['bytes'] or sha256(path) != checksum:
                     raise ValueError('Cached body hash/length mismatch')
+                if old.get('url') != url or old.get('kind') != kind or old.get('accept') != accept:
+                    raise ValueError('Cache request metadata mismatch')
+                receipt = Path(old['receipt_path'])
+                if not receipt.is_absolute():
+                    receipt = self.folder/receipt
+                elif not receipt.resolve().is_relative_to(self.folder):
+                    receipt = self.folder/'receipts'/key/receipt.name
+                if not receipt.resolve().is_relative_to(self.folder/'receipts'/key) or not receipt.is_file():
+                    raise ValueError('Original acquisition receipt is unavailable')
+                frozen = read_json(receipt)
+                if any(frozen.get(k) != old.get(k) for k in ('sha256','bytes','url','retrieved_utc')):
+                    raise ValueError('Cache index disagrees with immutable acquisition receipt')
                 audit = validator(path)
-                return dict(old,cache_hit=True,audit=audit)
+                current = dict(old, path=path.relative_to(self.folder).as_posix(),
+                               receipt_path=receipt.relative_to(self.folder).as_posix())
+                if old != current:
+                    write_json(pointer,current)
+                return dict(current,path=str(path),receipt_path=str(receipt),cache_hit=True,audit=audit)
             except (OSError,ValueError,KeyError) as error:
                 cache_issue = str(error)
         if self.offline:
@@ -115,7 +141,8 @@ class HttpCache:
                     frozen_receipt = self.folder/'receipts'/key/(uuid.uuid4().hex+'.json')
                     write_json(frozen_receipt,receipt)
                     receipt['receipt_path'] = str(frozen_receipt)
-                    write_json(pointer,receipt)
+                    write_json(pointer,dict(receipt, path=target.relative_to(self.folder).as_posix(),
+                        receipt_path=frozen_receipt.relative_to(self.folder).as_posix()))
                     return dict(receipt,cache_hit=False,audit=audit)
                 except urllib.error.HTTPError as error:
                     retry_after = error.headers.get('Retry-After','') if error.headers else ''

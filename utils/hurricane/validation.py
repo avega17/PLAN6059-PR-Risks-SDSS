@@ -71,7 +71,6 @@ def validate_prototype(prepare_manifest, grid_spec, output_folder):
     destination = Path(output_folder).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
     report_path = destination / 'validation_report.json'
-    markdown_path = destination / 'validation_report.md'
     checks = []
 
     def check(label, condition, details=None):
@@ -90,7 +89,7 @@ def validate_prototype(prepare_manifest, grid_spec, output_folder):
         spec = _load(grid_spec)
         check('Preparation manifest reports successful completion', prepared.get('status') == 'complete')
         observations = _output(prepared, 'observations', Path(prepare_manifest).parent)
-        for key in ('observations', 'storms', 'qc', 'canonical_csv', 'inventory'):
+        for key in ('observations', 'storms', 'qc', 'raw_points', 'inventory'):
             path = _output(prepared, key, Path(prepare_manifest).parent)
             check(f'Prepared output exists: {key}', arcpy.Exists(path) or Path(path).is_file(), path)
         inventory = _load(_output(prepared, 'inventory', Path(prepare_manifest).parent))
@@ -162,18 +161,25 @@ def validate_prototype(prepare_manifest, grid_spec, output_folder):
               missing_wind == summary.get('missing_usa_wind_included') and
               blank_agency == summary.get('missing_agency_included'),
               {'missing_wind': missing_wind, 'blank_agency': blank_agency})
-        csv_rows = csv_included = 0
-        csv_ids = set()
-        with Path(_output(prepared, 'canonical_csv', Path(prepare_manifest).parent)).open(
-                encoding='utf-8', newline='') as stream:
-            for row in csv.DictReader(stream):
-                csv_rows += 1
-                if row['ROW_STATUS'] == 'INCLUDED':
-                    csv_included += 1
-                    csv_ids.add((row['SID'], row['ISO_TIME']))
-        check('Canonical CSV accounts for raw and included observations',
-              csv_rows == summary.get('source_active_rows') and csv_included == count and csv_ids == seen,
-              {'raw_csv_rows': csv_rows, 'included_csv_rows': csv_included})
+        qc_rows = qc_included = 0
+        qc_ids = set()
+        with arcpy.da.SearchCursor(prepared['qc'], ['SID', 'ISO_TIME', 'ROW_STATUS']) as cursor:
+            for sid, iso, status in cursor:
+                qc_rows += 1
+                if status == 'INCLUDED':
+                    qc_included += 1
+                    qc_ids.add((sid, iso))
+        with arcpy.EnvManager(extent=None):
+            raw_count = int(arcpy.management.GetCount(prepared['raw_points'])[0])
+        check('Raw points and QC account for every source and included observation',
+              qc_rows == raw_count == summary.get('source_active_rows') and
+              qc_included == count and qc_ids == seen,
+              {'raw_points': raw_count, 'qc_rows': qc_rows, 'included': qc_included})
+        if prepared.get('canonical_csv'):
+            with Path(prepared['canonical_csv']).open(encoding='utf-8', newline='') as stream:
+                rows = list(csv.DictReader(stream))
+            check('Optional CSV agrees with QC', len(rows) == qc_rows and
+                  {(r['SID'], r['ISO_TIME']) for r in rows if r['ROW_STATUS'] == 'INCLUDED'} == seen)
         period = prepared.get('parameters', {})
         start = period.get('start_season', summary.get('start_season', 1955))
         end = period.get('end_season', summary.get('end_season', 2025))
@@ -195,7 +201,7 @@ def validate_prototype(prepare_manifest, grid_spec, output_folder):
         check('Reference is a constant computational grid', bool(np.all(ref_values == 0)))
         boundary = _output(spec, 'projected_boundary', Path(grid_spec).parent)
         check('Projected boundary exists', arcpy.Exists(boundary), boundary)
-        from utils.grid import ISLAND_POINTS
+        from utils.shared.grid import ISLAND_POINTS
         island_results = {}
         geometries = [row[0] for row in arcpy.da.SearchCursor(boundary, ['SHAPE@'])]
         sr_wgs = arcpy.SpatialReference(4326)
@@ -219,14 +225,7 @@ def validate_prototype(prepare_manifest, grid_spec, output_folder):
         check('Validation execution', False, f'{type(error).__name__}: {error}')
     report['passed'] = bool(checks) and all(item['passed'] for item in checks)
     report_path.write_text(json.dumps(report, indent=2, default=str), encoding='utf-8')
-    lines = ['# Hurricane prototype validation', '',
-             f"Result: **{'PASS' if report['passed'] else 'FAIL'}**", '',
-             '| Check | Result |', '|---|---|']
-    lines += [f"| {item['check']} | {'PASS' if item['passed'] else 'FAIL'} |" for item in checks]
-    lines += ['', 'Detailed values and paths are in `validation_report.json`.', '',
-              *[f'- {item}' for item in report['limitations']]]
-    markdown_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     if not report['passed']:
         failed = [item['check'] for item in checks if not item['passed']]
         raise PrototypeValidationError(f"Validation failed ({', '.join(failed)}). Report: {report_path}")
-    return {'report': str(report_path), 'markdown': str(markdown_path), 'passed': True}
+    return {'report': str(report_path), 'passed': True}

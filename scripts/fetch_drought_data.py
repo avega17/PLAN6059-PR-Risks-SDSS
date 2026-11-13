@@ -11,8 +11,8 @@ def main():
         resume = arcpy.GetParameter(3)
         result = fetch_drought_data(arcpy.GetParameterAsText(0),arcpy.GetParameterAsText(1),
             arcpy.GetParameterAsText(2),True if resume is None else bool(resume),True,
-            progress=arcpy.AddMessage,cancelled=lambda:bool(arcpy.env.isCancelled))
-        for index,key in enumerate(('manifest','statistics','qc','canonical_csv'),4):
+            progress=arcpy.AddMessage,cancelled=lambda:bool(arcpy.env.isCancelled),export_csv=bool(arcpy.GetParameter(4)))
+        for index,key in enumerate(('manifest',),5):
             arcpy.SetParameterAsText(index,result[key])
         arcpy.AddMessage(f'Acquisition complete; reference status: {result["reference_qc_status"]}.')
     except Exception as error:
