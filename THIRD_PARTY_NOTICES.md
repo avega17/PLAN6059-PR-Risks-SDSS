@@ -30,4 +30,8 @@ The upstream license is reproduced below. Retain this notice with distributions 
 
 ## Research references
 
-The deferred estimation note links HURRECON, CLIMADA, Tropycal and tcwind for comparison. No source from those packages is incorporated in this prototype. Their licenses must be assessed and notices retained if code is incorporated in a future implementation; citations alone are not a substitute for license terms.
+The local wind benchmark independently implements the mathematical equations in Boose, E.R., Serrano, M.I. & Foster, D.R. (2004), *Landscape and regional impacts of hurricanes in Puerto Rico*, Ecological Monographs 74, 335-352. DOI https://doi.org/10.1890/02-4057. Its four radius/profile scenarios also follow that study.
+
+Numerical conventions were checked against the author's [HurreconPython](https://github.com/hurrecon-model/HurreconPython) scalar speed function. The reviewed source SHA256 is `193fa153cf002e5229a6e1035769da9a1a4b446fb7eec9b4131e1c53a813880d`. A temporary in-memory comparison of 1,000 cases agreed to floating-point precision. Source from that GPL-3.0 engine is not included in this distribution. Preserve its license and notices if incorporating its code in future work.
+
+The processing guide also references CLIMADA, Tropycal and tcwind as research alternatives. Record their pinned versions, licenses and notices before incorporating code or dependencies.

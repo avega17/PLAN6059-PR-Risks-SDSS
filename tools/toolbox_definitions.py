@@ -71,6 +71,31 @@ HURRICANE_TOOLS = [
          ]),
 ]
 
+HURRICANE_TOOLS.extend([
+    dict(name='PrepareWindInputs', label='Prepare Wind Inputs', script='prepare_wind_inputs.py',
+         summary='Validate preparation/grid and prepare full USA tracks for four HURRECON benchmark storms.',
+         validator=validator(2, {4: 'hurricane_winds.gdb'}), params=[
+             parameter('ValidatedHurricaneData', 'Validated Hurricane Data', 'DEFile', 'validation_report.json from Validate Prototype.', extensions=['json']),
+             parameter('GridSpec', 'Grid Specification', 'DEFile', 'Validated shared grid_spec.json.', extensions=['json']),
+             parameter('OutputFolder', 'Wind Output Folder', 'DEFolder', 'Folder for hurricane_winds.gdb.'),
+             parameter('BenchmarkStorms', 'Benchmark Storms', 'GPString', 'Semicolon-separated SIDs for Betsy, Hugo, Georges and Maria.', optional=True,
+                       default='1956222N13313;1989254N13340;1998259N10335;2017260N12310'),
+             parameter('WindWorkspace', 'Wind Workspace', 'DEWorkspace', 'Prepared wind tracks, cells, settings and size table.', output=True)]),
+    dict(name='EstimateWindFields', label='Estimate Wind Fields', script='estimate_wind_fields.py',
+         summary='Benchmark four size scenarios at 15, 5 and 2.5 minutes; retain every 5-minute event peak.',
+         validator=validator(0, {2: 'wind_event_catalog'}), params=[
+             parameter('WindWorkspace', 'Wind Workspace', 'DEWorkspace', 'Geodatabase returned by Prepare Wind Inputs.'),
+             parameter('SizeScenarios', 'Size Scenarios', 'DETable', 'Optional table with RMW_KM and PROFILE_B. Blank uses the four published pairs.', optional=True),
+             parameter('WindCatalog', 'Wind Field Catalog', 'DETable', 'Storm/scenario catalog with relative raster names.', output=True)]),
+    dict(name='EvaluateWindEstimates', label='Evaluate Wind Estimates', script='evaluate_wind_estimates.py',
+         summary='Check retained fields, temporal convergence, quadrant radii and optional comparable station winds.',
+         validator=validator(0, {}), params=[
+             parameter('WindCatalog', 'Wind Field Catalog', 'DETable', 'Catalog returned by Estimate Wind Fields.'),
+             parameter('ReferenceObservations', 'Reference Wind Observations', 'DETable', 'Optional 60-second, 10-m station maxima with documented exposure/window/source; see setup guide.', optional=True),
+             parameter('Summary', 'Wind Benchmark Summary', 'DETable', 'Geodatabase evaluation results.', output=True),
+             parameter('Report', 'Validated Wind Benchmark', 'DEFile', 'Existing validation report with wind_benchmark status and evidence.', output=True, extensions=['json'])]),
+])
+
 DROUGHT_TOOLS = [
     dict(name='PlanDroughtDownload', label='Plan Drought Download', script='plan_drought_download.py',
          summary='Freeze the USDM Puerto Rico map-date cohort and inventory local ZIP candidates; no network access.',

@@ -1,4 +1,4 @@
-"""Build the three linked ArcGIS Pro Script Tools without extra dependencies.
+"""Build the linked ArcGIS Pro Script Tools without extra dependencies.
 
 The small ATBX Zip/JSON serialization pattern is adapted from MIT-licensed
 autobox, commit 298c57385cdede8b3417cc7b736a066febd874a9:
@@ -55,7 +55,7 @@ def build_toolbox(output=ROOT / 'HurricaneWinds_Model_Toolbox.atbx', overwrite=F
     if output.suffix.lower() != '.atbx':
         raise ValueError('Output must use the .atbx extension.')
     if output.exists() and not overwrite:
-        raise FileExistsError('Toolbox exists; use --overwrite to update the three Script Tools while preserving other tools.')
+        raise FileExistsError('Toolbox exists; use --overwrite to update Script Tools while preserving saved models.')
     if output.parent != ROOT:
         raise ValueError('Keep the toolbox at the repository root so linked scripts remain portable.')
     for tool in tool_specs:
@@ -68,7 +68,7 @@ def build_toolbox(output=ROOT / 'HurricaneWinds_Model_Toolbox.atbx', overwrite=F
     members['toolbox.content'] = json.dumps(content, indent=2)
     members['toolbox.content.rc'] = json.dumps({'map': {
         'title': title or 'Puerto Rico SDSS - Hurricane Winds',
-        'descr': description or 'Three auditable ArcPy stages for preparation, shared grid establishment and prototype validation. No wind estimation or hazard ranking.'}}, indent=2)
+        'descr': description or 'Hurricane preparation, shared grid, validation and HURRECON wind-field benchmarking.'}}, indent=2)
     for tool in tool_specs:
         params, resources = {}, {'title': tool['label'], 'description': tool['summary'], 'summary': tool['summary']}
         for spec in tool['params']:
@@ -160,7 +160,7 @@ def verify_toolbox(path, tools=None):
                 raise ValueError(f"Unexpected parameter contract for {tool['name']}.{expected['name']}")
             type_names = {'DEFile': 'File', 'DEFolder': 'Folder', 'GPLong': 'Long',
                           'DEFeatureClass': 'Feature Class', 'DETable': 'Table',
-                          'GPFeatureLayer': 'Feature Layer',
+                          'GPFeatureLayer': 'Feature Layer', 'DEWorkspace': 'Workspace',
                           'DERasterDataset': 'Raster Dataset', 'GPBoolean': 'Boolean','GPDate':'Date','GPString':'String'}
             if actual.datatype != type_names[expected['datatype']]:
                 raise ValueError(f"Unexpected datatype for {tool['name']}.{expected['name']}")
@@ -193,7 +193,8 @@ def main():
         ('DroughtRisk_Model_Toolbox.atbx', DROUGHT_TOOLS, 'droughtprobe', 'Drought')):
         path = build_toolbox(ROOT/filename, options.overwrite, tools=specs, alias=alias,
                              title='Puerto Rico SDSS - ' + title,
-                             description='Three linked Script Tools; scientific hazard estimation is deferred.')
+                             description=('Preparation and HURRECON wind-field benchmarking.' if alias == 'prrisks'
+                                          else 'Three linked drought acquisition Script Tools.'))
         report = {'toolbox': str(path)}
         if options.verify:
             report['tools'] = verify_toolbox(path, specs)

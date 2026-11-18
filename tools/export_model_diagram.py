@@ -6,6 +6,7 @@ saved diagram XML, not a ModelBuilder authoring or native image-export API.
 from __future__ import annotations
 
 import argparse
+from io import BytesIO
 import hashlib
 import json
 from pathlib import Path
@@ -20,8 +21,7 @@ DEFAULT_SUBTITLE = 'HurricaneWinds_Fetch_IBTrACS · three Script Tools · season
 DEFAULT_FOOTER = 'Audit prototype only · provisional boundary · no local-wind estimation or hazard ranking'
 
 
-def export_diagram(toolbox, destination, *, title=DEFAULT_TITLE,
-                   subtitle=DEFAULT_SUBTITLE, footer=DEFAULT_FOOTER):
+def _render_diagram(toolbox, model_name, *, title, subtitle, footer):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -29,9 +29,10 @@ def export_diagram(toolbox, destination, *, title=DEFAULT_TITLE,
     from matplotlib.path import Path as PlotPath
 
     with zipfile.ZipFile(toolbox) as archive:
-        model = json.loads(archive.read('Model.tool/tool.model'))
-        resources = json.loads(archive.read('Model.tool/tool.content.rc'))['map']
-        xml = archive.read('Model.tool/tool.model.diagram.xml')
+        prefix = f'{model_name}.tool/'
+        model = json.loads(archive.read(prefix + 'tool.model'))
+        resources = json.loads(archive.read(prefix + 'tool.content.rc'))['map']
+        xml = archive.read(prefix + 'tool.model.diagram.xml')
     diagram = ET.fromstring(xml)
     nodes = [node for node in diagram.find('Nodes')
              if node.get('Class', '').endswith('.MBNode')]
@@ -92,7 +93,7 @@ def export_diagram(toolbox, destination, *, title=DEFAULT_TITLE,
                   fontfamily='DejaVu Sans', color='#17384c', zorder=3)
     fig.text(.055, .958, title,
              fontsize=17, weight='bold', color='#17384c')
-    fig.text(.055, .933, subtitle,
+    fig.text(.055, .933, subtitle or resources['title'],
              fontsize=10, color='#466477')
     for x, label, color in ((.055, 'Inputs', '#e4eff8'), (.27, 'Script Tools', '#ffdf86'),
                             (.535, 'Typed outputs', '#e0f0e4')):
@@ -104,14 +105,57 @@ def export_diagram(toolbox, destination, *, title=DEFAULT_TITLE,
              fontsize=8.5, color='#466477', linespacing=1.5)
     fig.text(.055, .018, footer,
              fontsize=8.2, color='#466477')
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(destination.with_suffix('.png'), dpi=170, facecolor=fig.get_facecolor())
-    plt.close(fig)
-    return {'model': resources['title'], 'nodes': len(nodes),
+    return fig, {'model': resources['title'], 'nodes': len(nodes),
             'links': len(diagram.find('Links')),
-            'saved_diagram_sha256': hashlib.sha256(xml).hexdigest(),
-            'png': str(destination.with_suffix('.png'))}
+            'saved_diagram_sha256': hashlib.sha256(xml).hexdigest()}
+
+
+def export_diagram(toolbox, destination, *, title=DEFAULT_TITLE,
+                   subtitle=DEFAULT_SUBTITLE, footer=DEFAULT_FOOTER,
+                   model_name='Model', all_models=False):
+    """Keep one PNG per toolbox, optionally stacking its native saved graphs."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from PIL import Image
+
+    models = [model_name]
+    if all_models:
+        with zipfile.ZipFile(toolbox) as archive:
+            models = sorted(name.split('.tool/')[0] for name in archive.namelist()
+                            if name.endswith('.tool/tool.model'))
+        models.sort(key=lambda name: (name != 'Model', name))
+    if not models:
+        raise ValueError('The toolbox contains no saved ModelBuilder models.')
+    destination = Path(destination).with_suffix('.png')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    panels, metadata = [], []
+    try:
+        for name in models:
+            fig, details = _render_diagram(toolbox, name, title=title,
+                subtitle=subtitle if len(models) == 1 else None, footer=footer)
+            try:
+                with BytesIO() as buffer:
+                    fig.savefig(buffer, format='png', dpi=170, facecolor=fig.get_facecolor())
+                    buffer.seek(0)
+                    with Image.open(buffer) as panel:
+                        panels.append(panel.convert('RGB'))
+            finally:
+                plt.close(fig)
+            metadata.append(details)
+        canvas = Image.new('RGB', (max(p.width for p in panels), sum(p.height for p in panels)), '#f7fafc')
+        try:
+            offset = 0
+            for panel in panels:
+                canvas.paste(panel, (0, offset))
+                offset += panel.height
+            canvas.save(destination)
+        finally:
+            canvas.close()
+    finally:
+        for panel in panels:
+            panel.close()
+    return {'models': metadata, 'png': str(destination)}
 
 
 if __name__ == '__main__':
@@ -121,6 +165,9 @@ if __name__ == '__main__':
     parser.add_argument('--title', default=DEFAULT_TITLE)
     parser.add_argument('--subtitle', default=DEFAULT_SUBTITLE)
     parser.add_argument('--footer', default=DEFAULT_FOOTER)
+    parser.add_argument('--model', default='Model', help='Internal saved model name')
+    parser.add_argument('--all-models', action='store_true', help='Stack every saved graph in the same PNG')
     arguments = parser.parse_args()
     print(json.dumps(export_diagram(arguments.toolbox, arguments.output,
-        title=arguments.title, subtitle=arguments.subtitle, footer=arguments.footer), indent=2))
+        title=arguments.title, subtitle=arguments.subtitle, footer=arguments.footer,
+        model_name=arguments.model, all_models=arguments.all_models), indent=2))

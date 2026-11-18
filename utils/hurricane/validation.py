@@ -77,13 +77,13 @@ def validate_prototype(prepare_manifest, grid_spec, output_folder):
         checks.append({'check': label, 'passed': bool(condition), 'details': details})
 
     report = {'schema_version': 1, 'created_utc': datetime.now(timezone.utc).isoformat(),
-              'scope': 'Audit prototype; no estimated wind surface or hazard rank.',
+              'scope': 'Preparation and reference-grid audit; wind evaluation is reported separately in wind_benchmark when present.',
               'prepare_manifest': str(Path(prepare_manifest).resolve()),
               'grid_spec': str(Path(grid_spec).resolve()),
               'arcgis': arcpy.GetInstallInfo(), 'checks': checks,
               'limitations': ['Natural Earth mask is generalized and provisional.',
                               '250 m cells are computational resolution, not observed wind accuracy.',
-                              'No wind estimation, hazard ranking, or independent wind validation was performed.']}
+                              'These preparation checks do not evaluate wind estimates or hazard ranking.']}
     try:
         prepared = _load(prepare_manifest)
         spec = _load(grid_spec)

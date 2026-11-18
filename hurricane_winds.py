@@ -1,8 +1,4 @@
-"""Auditable Hurricane Winds preparation, shared grid, and validation entry points.
-
-Run with ArcGIS Pro's Python, not a general-purpose Python installation.
-No wind surface or hazard ranking is estimated by this prototype.
-"""
+"""Hurricane observation preparation and HURRECON wind-field benchmarking."""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +20,29 @@ def establish_reference_grid(*args, **kwargs):
 def validate_prototype(*args, **kwargs):
     from utils.hurricane.validation import validate_prototype as validate
     return validate(*args, **kwargs)
+
+
+def prepare_wind_inputs(*args, **kwargs):
+    from utils.hurricane.wind_workflow import prepare_wind_inputs as prepare
+    return prepare(*args, **kwargs)
+
+
+def estimate_wind_fields(*args, **kwargs):
+    from utils.hurricane.wind_workflow import estimate_wind_fields as estimate
+    return estimate(*args, **kwargs)
+
+
+def evaluate_wind_estimates(*args, **kwargs):
+    from utils.hurricane.wind_workflow import evaluate_wind_estimates as evaluate
+    return evaluate(*args, **kwargs)
+
+
+def run_wind_benchmark(validated_hurricane_data, grid_spec, output_folder,
+                       benchmark_storms=None, size_scenarios=None, reference_observations=None):
+    inputs = prepare_wind_inputs(validated_hurricane_data, grid_spec, output_folder, benchmark_storms)
+    fields = estimate_wind_fields(inputs['workspace'], size_scenarios)
+    result = evaluate_wind_estimates(fields['catalog'], reference_observations)
+    return dict(**inputs, **fields, **result)
 
 
 def run_prototype(raw_points, output_folder, start_season=1955, end_season=2025,
@@ -62,6 +81,22 @@ def build_parser():
     validation.add_argument('--prepare-manifest', required=True)
     validation.add_argument('--grid-spec', required=True)
     validation.add_argument('--output-folder', default='output/hurricane/reports')
+    for name in ('wind-prepare', 'wind-benchmark'):
+        cmd = sub.add_parser(name, help='Prepare wind inputs' if name == 'wind-prepare'
+                             else 'Run the three-stage HURRECON benchmark')
+        cmd.add_argument('--validated-hurricane-data', default='output/hurricane/reports/validation_report.json')
+        cmd.add_argument('--grid-spec', default='output/shared/grid/grid_spec.json')
+        cmd.add_argument('--output-folder', default='output/hurricane/data')
+        cmd.add_argument('--benchmark-storms', help='Semicolon-separated benchmark SIDs; defaults to all four')
+        if name == 'wind-benchmark':
+            cmd.add_argument('--size-scenarios', help='Table with RMW_KM/PROFILE_B, or quoted radius/B pairs')
+            cmd.add_argument('--reference-observations')
+    estimate = sub.add_parser('wind-estimate', help='Estimate benchmark wind fields')
+    estimate.add_argument('--workspace', default='output/hurricane/data/hurricane_winds.gdb')
+    estimate.add_argument('--size-scenarios')
+    evaluate = sub.add_parser('wind-evaluate', help='Evaluate published benchmark fields')
+    evaluate.add_argument('--wind-catalog', default='output/hurricane/data/hurricane_winds.gdb/wind_event_catalog')
+    evaluate.add_argument('--reference-observations')
     return parser
 
 
@@ -69,7 +104,9 @@ def main(argv=None):
     options = vars(build_parser().parse_args(argv))
     command = options.pop('command')
     functions = {'prepare': prepare_hurricane_data, 'grid': establish_reference_grid,
-                 'validate': validate_prototype, 'run': run_prototype}
+                 'validate': validate_prototype, 'run': run_prototype,
+                 'wind-prepare': prepare_wind_inputs, 'wind-estimate': estimate_wind_fields,
+                 'wind-evaluate': evaluate_wind_estimates, 'wind-benchmark': run_wind_benchmark}
     try:
         result = functions[command](**options)
     except Exception as error:

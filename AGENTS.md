@@ -2,7 +2,7 @@
 
 Keep this repository understandable to classmates using ArcGIS ModelBuilder.
 
-- Reuse the two root entrypoints, six adapters and existing hazard packages. Keep runtime data validation in the workflows.
+- Reuse the two root entrypoints, thin Script Tool adapters and existing hazard packages. Keep runtime data validation in the workflows.
 - Maintain only the five guides in `docs/`; consolidate findings into their processing plans. Put PNG figures in `figures/` and source documents in `references/`.
 - Use one canonical result per hazard: `output/hurricane/{data,reports}` and `output/drought/{plan,data,reports,cache}`. The common grid is `output/shared/grid`; project and MCP runtime files belong in `output/arcgis/{project,bridge}`.
 - Preserve original inputs, downloaded bodies, hashes and original receipts. Relocate caches through verified content-addressed resolution. Never invent acquisition dates or reinterpret missing data as zero.

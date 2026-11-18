@@ -1,4 +1,4 @@
-"""Eight small offline checks for scientific rules and reusable cache integrity."""
+"""Small offline checks for data contracts and wind-model numerical behavior."""
 import copy
 from datetime import date
 import hashlib
@@ -103,6 +103,85 @@ class Contracts(unittest.TestCase):
             body.write_bytes(b'{}')
             with self.assertRaises(ConnectionError):
                 client.get(url, 'json', lambda p:json.loads(p.read_text()))
+
+
+class WindEquations(unittest.TestCase):
+    def test_radial_peak_eye_asymmetry_and_missing(self):
+        import numpy as np
+        from utils.hurricane.wind import wind_speed, KNOT_MPS
+        self.assertAlmostEqual(64 * KNOT_MPS, 32.92444444444445)
+        values = wind_speed(np.array([0., 40., 40.]), np.array([90., 90., 270.]),
+                            18., 0., 10., 60., 40., 1.4)
+        np.testing.assert_allclose(values, [0., 48., 40.])
+        self.assertEqual(float(wind_speed(40, 270, 18, 0, 50, 20, 40, 1.4)), 0)
+        with self.assertRaises(ValueError):
+            wind_speed(40, 90, 18, 0, 10, np.nan, 40, 1.4)
+
+    def test_spherical_geometry_and_heading_wrap(self):
+        import numpy as np
+        from utils.hurricane.wind import range_bearing
+        for lat, lon, expected in [(1, 0, 0), (0, 1, 90), (-1, 0, 180), (0, -1, 270)]:
+            distance, bearing = range_bearing(0, 0, lat, lon)
+            self.assertAlmostEqual(float(distance), 6367 * np.pi / 180)
+            self.assertAlmostEqual(float(bearing), expected)
+        self.assertLess(float(range_bearing(0, 179.9, 0, -179.9)[0]), 23)
+
+    def test_native_interpolation_and_gap_policy(self):
+        from datetime import datetime, timedelta, timezone
+        import numpy as np
+        from utils.hurricane.wind import interpolate_track
+        start = datetime(2017, 9, 20, tzinfo=timezone.utc)
+        records = [dict(time=start + timedelta(minutes=m), lat=18., lon=lon,
+                        wind=w, nature='TS') for m, lon, w in [(0, 179.9, 30), (17, -179.9, 40)]]
+        samples = interpolate_track(records, 5)
+        self.assertTrue(np.all(np.diff(samples['time']) <= 300))
+        self.assertEqual(samples['time'][-1], records[-1]['time'].timestamp())
+        self.assertEqual(samples['wind'][-1], 40)
+        self.assertTrue(np.all(np.abs(samples['lon']) > 179))
+        window = (start.timestamp() + 73, start.timestamp() + 697)
+        limited = interpolate_track(records, 2.5, window=window)
+        self.assertEqual(tuple(limited['time'][[0, -1]]), window)
+        with self.assertRaises(ValueError):
+            interpolate_track(records, 2.5, window=(start.timestamp() - 1, window[1]))
+        phases = [dict(time=start + timedelta(hours=i), lat=18., lon=-66. + i / 10,
+                       wind=40., nature=n) for i, n in enumerate(['TS', 'TS', 'ET', 'TS', 'TS'])]
+        with self.assertRaises(ValueError):
+            interpolate_track(phases, 2.5, window=(start.timestamp() + 7200, start.timestamp() + 12600))
+        records[-1]['wind'] = None
+        with self.assertRaises(ValueError):
+            interpolate_track(records, 5)
+        records[-1]['wind'] = 40
+        records[-1]['time'] = start + timedelta(hours=7)
+        with self.assertRaises(ValueError):
+            interpolate_track(records, 5)
+
+    def test_peak_bounds_match_exhaustive_evaluation(self):
+        import numpy as np
+        from utils.hurricane.wind import peak_fields, range_bearing, wind_speed, SIZE_SCENARIOS
+        samples = dict(lat=np.array([18., 18., 30.]), lon=np.array([-66., -65.5, -20.]),
+                       wind=np.array([60., 55., 40.]), speed=np.array([5., 5., 10.]),
+                       heading=np.array([270., 270., 45.]))
+        lat, lon = np.array([18., 18.5, 17.5]), np.array([-65.7, -66., -66.])
+        actual, stats = peak_fields(samples, lat, lon)
+        expected = np.zeros_like(actual)
+        for i in range(3):
+            distance, bearing = range_bearing(samples['lat'][i], samples['lon'][i], lat, lon)
+            for j, (radius, profile) in enumerate(SIZE_SCENARIOS):
+                expected[j] = np.maximum(expected[j], wind_speed(distance, bearing,
+                    samples['lat'][i], samples['heading'][i], samples['speed'][i],
+                    samples['wind'][i], radius, profile))
+        np.testing.assert_allclose(actual, expected, rtol=1e-12)
+        self.assertGreater(stats['bounded_skips'], 0)
+
+    def test_radii_and_convergence(self):
+        import numpy as np
+        from utils.hurricane.wind import quadrant_radius, wind_speed, convergence, KNOT_MPS
+        radius = quadrant_radius(135 * KNOT_MPS, 0, 0, 30, 1.4, 64, 'NE')
+        self.assertAlmostEqual(radius, 166.8517034139759)
+        self.assertAlmostEqual(float(wind_speed(radius, 90, 18, 0, 0,
+                                               135 * KNOT_MPS, 30, 1.4, 1)), 64 * KNOT_MPS)
+        result = convergence(np.array([0., 40.]), np.array([0., 40.]))
+        self.assertTrue(result['passed'])
 
 
 if __name__ == '__main__':
