@@ -23,6 +23,49 @@ def archive_date(name):
     return value.isoformat()
 
 
+def has_part_intersection(shape, envelope):
+    """Conservative WGS84 ring-box screen, never a geometry reconstruction.
+
+    Outer rings enclosing the search area are retained, as are intersecting
+    holes. A positive result requires ordinary GIS clipping for actual overlap.
+    """
+    import numpy as np
+    xmin, ymin, xmax, ymax = envelope
+    offset = 100
+    if len(shape) < 100 or struct.unpack_from('>i', shape, 0)[0] != 9994:
+        raise ValueError('Invalid shapefile header for spatial screening.')
+    found = False
+    while offset < len(shape):
+        if offset + 12 > len(shape):
+            raise ValueError('Truncated shapefile record.')
+        length = struct.unpack_from('>i', shape, offset + 4)[0] * 2
+        p = offset + 8
+        if length < 4 or p + length > len(shape):
+            raise ValueError('Invalid shapefile record size.')
+        kind = struct.unpack_from('<i', shape, p)[0]
+        if kind not in (0, 5):
+            raise ValueError('Spatial screening supports 2D Polygon records only.')
+        if kind == 5:
+            if length < 44:
+                raise ValueError('Truncated polygon header.')
+            parts, points = struct.unpack_from('<ii', shape, p + 36)
+            if parts <= 0 or points < 4 or 44 + parts * 4 + points * 16 > length:
+                raise ValueError('Invalid polygon part/point counts.')
+            starts = np.frombuffer(shape, '<i4', parts, p + 44)
+            xy = np.frombuffer(shape, '<f8', points * 2, p + 44 + parts * 4).reshape(-1, 2)
+            if starts[0] != 0 or np.any(np.diff(starts) <= 0) or starts[-1] >= points or not np.isfinite(xy).all():
+                raise ValueError('Invalid polygon offsets or nonfinite coordinates.')
+            for i, start in enumerate(starts):
+                end = starts[i+1] if i+1 < parts else points
+                ring = xy[start:end]
+                if len(ring) < 4 or not np.array_equal(ring[0], ring[-1]):
+                    raise ValueError('Polygon ring is unclosed or too short.')
+                low, high = ring.min(axis=0), ring.max(axis=0)
+                found |= high[0] >= xmin and low[0] <= xmax and high[1] >= ymin and low[1] <= ymax
+        offset = p + length
+    return bool(found)
+
+
 def read_dbf(data):
     if len(data) < 33:
         raise ValueError('Truncated DBF header')

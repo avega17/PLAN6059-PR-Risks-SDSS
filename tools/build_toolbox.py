@@ -194,7 +194,7 @@ def main():
         path = build_toolbox(ROOT/filename, options.overwrite, tools=specs, alias=alias,
                              title='Puerto Rico SDSS - ' + title,
                              description=('Preparation and HURRECON wind-field benchmarking.' if alias == 'prrisks'
-                                          else 'Three linked drought acquisition Script Tools.'))
+                                          else 'Linked drought acquisition and continuous hazard-processing Script Tools.'))
         report = {'toolbox': str(path)}
         if options.verify:
             report['tools'] = verify_toolbox(path, specs)

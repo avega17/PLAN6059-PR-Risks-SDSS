@@ -1,6 +1,103 @@
 # Puerto Rico drought: literature review and processing design
 
-This maintained design combines the literature review with source/coverage findings from the November 12, 2026 inspection. Acquisition is implemented; weekly rasters, temporal indicators and ranking remain future work. See [ModelBuilder setup](drought_modelbuilder_setup.md) for execution. Research/library versions below describe that inspection, not a promise of current external releases.
+This maintained design combines the literature review, acquisition findings and the continuous-indicator implementation. The second workflow prepares weekly spatial states, calculates occupancy/severity and both event rules, and evaluates the results before classification review. Final ranking remains a separate phase. See [ModelBuilder setup](drought_modelbuilder_setup.md) for exact parameters. Research/library versions below describe their inspection, not a promise of current external releases.
+
+The [classification report](drought_classification_report.md) now provides measured candidate breaks, class counts, clipped land areas and a transition matrix for the completed indicators. Its recommendations remain open for review; no final crosswalk is adopted.
+
+## Discussing the saved drought acquisition model
+
+**Drought_Fetch_USDM** freezes the expected weekly calendar, retrieves the source archives and reference statistics, and verifies the saved result offline. The three tools pass a plan and manifest between them. **Validated Drought Data** is the one public output. See the [setup guide](drought_modelbuilder_setup.md#drought-acquisition-overview) for the full tool diagrams and parameter values.
+
+```mermaid
+flowchart TD
+    Dates["Start and End Date + Plan Folder"] --> Plan["Plan Drought Download"]
+    Plan --> Calendar["Download Plan<br/>1,357 baseline weeks + 3 end buffers"]
+    Calendar --> Fetch["Fetch Drought Data"]
+    Folders["Cache Folder + Acquisition Folder"] --> Fetch
+    Fetch --> Sources["Cached USDM ZIPs and API responses<br/>Statistics and QC tables"]
+    Fetch --> Manifest["Download Manifest<br/>Internal JSON with dates, paths and checksums"]
+    Manifest --> Check["Validate Drought Download"]
+    Reports["Validation Folder"] --> Check
+    Check --> Ready["Validated Drought Data<br/>JSON for Prepare Drought States"]
+```
+
+[Download the drought acquisition diagram as a PNG](../figures/discussion/drought_acquisition.png).
+
+| Stage | What to point out in the discussion |
+| --- | --- |
+| **Plan Drought Download** | The form uses **January 1, 2000 through December 31, 2025**. The Python planner enumerates expected Tuesday map dates and labels baseline versus buffer weeks. The source record starts on **January 4, 2000**. Three January 2026 maps provide recovery context for events near the end of 2025. Their buffer label keeps them outside the historical denominator. |
+| **Fetch Drought Data** | Retrieves weekly **national merged-class USDM polygon ZIPs** and Puerto Rico reference statistics. Those include territory-wide cumulative and exact-category area percentages, the Drought Severity and Coverage Index (DSCI), and exact-category area percentages for **78 municipios**. Resume reuses cached responses after checksum verification. ArcPy writes the normalized statistics and quality-control tables to the acquisition geodatabase, and the manifest records the original response locations and hashes. |
+| **Validate Drought Download** | Rechecks archive integrity, map dates, baseline/buffer roles and actual normalized values against the saved source responses. The verified run contains **1,357 baseline maps + 3 end buffers**, **654,160 statistics rows** and **231 retained warnings** covering source layout and reference disagreements. The final JSON (`download_validation.json`) links to the acquisition manifest and feeds **Prepare Drought States**. |
+
+- **Why keep both polygons and statistics?** The polygons locate drought categories. The API percentages summarize areas and provide a comparison for quality checks. The existing Culebra example shows why that matters. For two August 2015 weeks the API reports both None and D2 as 100%, while the polygon check locates the Culebra control point in D2.
+- **What happens on a map with no Puerto Rico drought polygons?** The acquisition model still requires that week's archive. An empty Puerto Rico clip can be a valid week. The processing model assigns None only where assessment coverage is supported, and preserves unknown coverage separately.
+- **Where does hazard processing start?** The next saved model, **Drought_Process_USDM**, combines the validation JSON with the shared grid. It clips and rasterizes weekly polygons, then calculates D1+ weeks per year, durations and other indicators. Those results support the separate 1/3/5 classification discussion.
+
+## Discussing the saved drought processing model
+
+**Drought_Process_USDM** uses the validated acquisition handoff, the shared grid specification and a processing folder. The saved model turns weekly polygons into aligned drought states, calculates continuous indicators and checks the published results. See the [drought setup guide](drought_modelbuilder_setup.md#drought-processing-overview) for the tool algorithms and parameter values.
+
+```mermaid
+flowchart TD
+    Inputs["Validated Drought Data + Grid Specification<br/>Processing Folder"] --> Prepare["Prepare Drought States"]
+    Prepare --> Workspace["Processing Workspace · internal<br/>Dated polygons and weekly cube reference"]
+    Workspace --> Calculate["Calculate Drought Metrics"]
+    Calculate --> Catalog["Metrics Catalog · internal<br/>Names and units of published indicators"]
+    Catalog --> Evaluate["Evaluate Drought Metrics"]
+    Evaluate --> Indicator["D1+ Weeks per Year"]
+    Evaluate --> Coverage["Valid Week Count"]
+    Evaluate --> Report["Validated Drought Metrics"]
+```
+
+[Download the drought processing diagram as a PNG](../figures/discussion/drought_processing.png).
+
+| Stage | What to point out in the discussion |
+| --- | --- |
+| **Prepare Drought States** | Reuses verified spatial products when available. A fresh build uses **Pairwise Clip**, **Project**, **Dissolve** and **Polygon To Raster** to place weekly categories on the shared grid. The weekly cube keeps None, D0 and unknown as distinct values. |
+| **Calculate Drought Metrics** | Counts D1-or-worse observations and divides by **26 years** for cells with all **1,357 baseline weeks**. It also calculates severity and event duration with strict and three-week recovery rules. January 2026 buffer maps inform event termination while baseline counts stay within 2000–2025. |
+| **Evaluate Drought Metrics** | Checks indicator values and annual counts against the cube, including coverage and NoData. It uses **Create Fishnet** and **Pairwise Intersect** to compare cell-center and dominant land-area assignments for six benchmark weeks. It returns the indicator raster, the coverage raster and the updated validation JSON. |
+
+Put **D1+ Weeks per Year** beside **Valid Week Count** in the discussion. Together they show where drought occurred more often and which cells have enough observations for that comparison. The proposed 1/3/5 thresholds are discussed in the [drought classification report](drought_classification_report.md).
+
+## Implemented processing contract
+
+The three processing tools are **Prepare Drought States → Calculate Drought Metrics → Evaluate Drought Metrics**. They use the complete cached cohort: 1,357 baseline weeks and three end buffers. There is no forecasting or longer SPI/SPEI branch in this implementation. All spatial work uses the existing EPSG:32161, 250 m, 1,140-column by 267-row reference grid.
+
+`drought_processing.gdb` holds dated PR drought polygons, original-record lineage, weekly geometry/source audits, an island/date assessment ledger, settings, normalized cell/annual/event tables and an indicator catalog. One `drought_weekly_cube.npz` holds uint8 states, dates, roles and island allocation. Individual weekly rasters and duplicate CSV exports are not retained. A compressed cube is a processing cache, not a new native meteorological dataset.
+
+The first complete spatial build processed all 1,360 maps in about **117 minutes** on this workstation; the compressed cube occupies **4.55 MiB**. The conservative screen avoided GIS clipping for 607 weeks. The metric tool then completed in **4 minutes 39 seconds**. These are measured local runtimes, not guarantees for another machine. Ordinary reruns verify and reuse the completed spatial cache.
+
+The actual saved `Drought_Process_USDM` model subsequently passed all three stages in **7 minutes 15 seconds**, including a 37-second spatial-cache check and about two minutes of evaluation. Its two public rasters, catalog and internal datasets survived model completion. The retained geodatabase is about **253 MiB** and contains 1,233 dated/category polygon records, 144,085 cell rows, 3,746,210 annual rows, 2,040,640 event rows across both recovery rules and 11 indicator rasters.
+
+| Island | Study cells | Complete 1,357-week cells |
+|---|---:|---:|
+| Mainland | 140,488 | 140,488 |
+| Vieques | 2,416 | 2,416 |
+| Culebra | 421 | 421 |
+| Mona (audit only; outside index scope) | 760 | 0 |
+
+Across the 143,325 eligible cells covering the inhabited study islands, `W_D1` ranges from **0 to 8.96 weeks/year**, with a cell mean of **2.57**. The six benchmark weeks show **99.960-100%** agreement between cell-center and dominant-land-area assignment; the largest difference affects 57 cells, representing about 2.78 km² of land. Polygon-versus-API cumulative-area differences reach about **1.53 percentage points**. These comparisons retain the reference warnings and quantify source/mask differences; they neither establish independent drought skill nor settle sensitivity across all weeks.
+
+Preparation inspects the actual source CRS, clips original national geometries before projection, dissolves by date/category and checks geometry and cross-category overlap. Repairs occur only in working copies; feature loss stops the workflow. Numerical overlap tolerance is 0.000001 m²; larger cross-category overlaps require source review. Original ZIPs, hashes, receipts and API disagreements remain unchanged. A conservative NumPy ring-box screen skips GIS work only for definitely empty regional candidates; it does not reconstruct rings or infer assessment coverage.
+
+The population-focused course index covers mainland PR, Vieques and Culebra; Mona is outside the index scope. The declared assessment policy for the study islands uses the provider's [weekly PR product scope](https://droughtmonitor.unl.edu/Maps/MapArchive/MapAreas.aspx) and complete municipio/date chronology. It is a documented interpretation of product coverage, not evidence inferred from drought occurrence or API None percentages. The Natural Earth coast remains generalized. Mona's sparse observations are retained only for the shared-grid data audit: mapped categories remain observed, other observations remain unknown, and full-period indicators remain NoData. This is an expected out-of-scope edge case, not a limitation or blocker for the population-focused index.
+
+The primary raster is `W_D1 = N_D1 / 26`. Integer eligible D1 counts and valid counts accompany it; supporting products include D2 occupancy, temporal ordinal burden, post-2004 occupancy and both event-rule summaries. Partial observed counts remain in the normalized cell table. Annual rows preserve each year's actual 52/53-map count, rather than assuming 52 observations. Event counts describe observed episodes intersecting the baseline divided by 26; they are not annual drought probabilities. Buffer-only events are excluded.
+
+Three-week events end at the last D1+ observation before three consecutive D0/None observations. Their confirmation date is stored separately. Short internal recovery dips remain within the event span, but trailing confirmation weeks do not. Unknown observations split support and generate censor flags. At the start of observation, onset remains left-censored until the rule's required calm streak has been observed. Strict runs use one recovery observation. Both rules retain observed span, baseline span, baseline D1 count, peak encoded class and left/right censor flags. Completed-duration medians/maxima summarize baseline spans of uncensored, confirmed events; censored observed spans are separate diagnostics. No-event counts are zero; undefined duration statistics remain null/NoData.
+
+Evaluation reads actual raster pixels and normalized tables, checks all annual rows against the cube, and checks the known Culebra controls. Six in-cohort weeks support state reference-area and cell-assignment comparisons, including 2026-01-06 only as a buffer. Exact dominant-category land-area assignment includes the None remainder; equal-area ties favor the higher category. A Polygon To Raster priority field is not used to emulate area-only tie breaking, because it can override area dominance. State comparisons are diagnostic because source coastlines, domain coverage and area methods differ. No new municipio boundary download is required; full 78-municipio spatial reconciliation remains deferred.
+
+The existing drought validation JSON receives a separately scoped `processing` assessment. Acquisition `passed` is not processing approval. Processing `VALIDATED` describes computational consistency and explicit coverage exclusions; it does not establish independent drought skill, approve 1/3/5 breaks or eliminate coastal uncertainty. Changes to map dates, roles, archive contents or the grid invalidate the prepared cache; a repeated fetch with identical maps and a new receipt timestamp does not. Classification will use integer counts and eligible coverage, preserving unknown cells as NoData.
+
+### Corrections to the supplied implementation blueprint
+
+- The full read-only cache scan found **607 empty-envelope candidates and 753 active candidates**, rather than 850+ empty weeks. Screening is conservative; a positive bounding-box test is not proof of a PR drought intersection.
+- The complete cube is **413,956,800 bytes (394.78 MiB) uncompressed**. Compressed size, runtime and reload speed are measured outcomes, not the report's guaranteed 4 MB/0.2-second/9-minute claims.
+- No ring reconstruction or new GeoParquet dependency is needed for this round. Original GIS geometry handles shells and holes.
+- Recovery confirms an event's last D1+ week; it does not automatically assign termination to late 2025 or append three weeks to duration.
+- The 2014-2016 spatial pattern supports inspection against credible references; expected east/south severity is not an independent-validation criterion.
+- Tertiles, fixed 3/7-week breaks, class-transition matrices and combined hurricane/drought ranks remain in the later classification phase.
 
 ## 1. Recommended scope and observation period
 
@@ -17,11 +114,11 @@ The first five entries are peer-reviewed journal articles; the Puerto Rico proce
 | Study | Area, inputs and support | Indicator / threshold | Validation and limitation | Transfer to this project |
 |---|---|---|---|---|
 | Leeper et al. (2022), [10.1002/joc.7653](https://doi.org/10.1002/joc.7653) | US including PR, 2000-2019; 1,044 weekly USDM maps on a 5 km grid. | D1-or-worse event onset; termination requires three subsequent D0/None weeks. Short recovery gaps can remain within an event. Counts, duration and intensification. | A historical event climatology, not a PR loss model. Comparisons with other drought measures are not independent impact validation. | Strongest direct USDM event-method precedent. Compare its recovery rule with strict consecutive-week runs; retain censor flags. Its 5 km grid does not establish 250 m accuracy. |
-| CarrÃ£o, Naumann & Barbosa (2016), [10.1016/j.gloenvcha.2016.04.012](https://doi.org/10.1016/j.gloenvcha.2016.04.012) | Global/subnational assessment; historical monthly precipitation deficits at 0.5 degrees; exposure and socioeconomic inputs at other supports. | Separate hazard, exposure and vulnerability; relative risk composite. | Internal robustness/composite comparisons and geographic plausibility; not an absolute loss scale. | Supports naming the USDM product a hazard layer and adding sector-specific exposure/vulnerability only in a later risk study. Do not copy global relative classes to PR. |
+| Carrão, Naumann & Barbosa (2016), [10.1016/j.gloenvcha.2016.04.012](https://doi.org/10.1016/j.gloenvcha.2016.04.012) | Global/subnational assessment; historical monthly precipitation deficits at 0.5 degrees; exposure and socioeconomic inputs at other supports. | Separate hazard, exposure and vulnerability; relative risk composite. | Internal robustness/composite comparisons and geographic plausibility; not an absolute loss scale. | Supports naming the USDM product a hazard layer and adding sector-specific exposure/vulnerability only in a later risk study. Do not copy global relative classes to PR. |
 | Meza et al. (2020), [10.5194/nhess-20-695-2020](https://nhess.copernicus.org/articles/20/695/2020/) | Global agricultural systems, 1980-2016; hydrologic/crop-model hazards at 0.5 degrees; irrigated and rainfed exposure. | Irrigated frequency/severity uses streamflow/demand departures from calendar-month medians in 1986-2015; rainfed hazard uses a 10% AET/PET reduction relative to its reference mean. | Sensitivity and impact-record comparisons; national vulnerability and incomplete impact records limit validation. | Demonstrates why agricultural risk needs crop/water-system information. Its thresholds and model inputs cannot be inferred from DM polygons. |
-| Vicente-Serrano, BeguerÃ­a & LÃ³pez-Moreno (2010), [10.1175/2009JCLI2909.1](https://doi.org/10.1175/2009JCLI2909.1) | Observatories with different climates; precipitation and temperature/PET inputs; multiple accumulation periods. | SPEI standardizes accumulated precipitation-minus-PET; compares with SPI and sc-PDSI. No universal PR 1/3/5 hazard scale. | Cross-index comparisons and warming experiments; source/PET choice still matters. | Method foundation for an independently computed longer-baseline climate-index branch. Define scale and calibration period before estimating event statistics. |
-| BeguerÃ­a et al. (2014), [10.1002/joc.3887](https://doi.org/10.1002/joc.3887) | Observational and global gridded climate series; method study rather than a PR mapping resolution. | SPEI fitting, ET methods and temporal weighting; recommends unbiased probability-weighted moments for fitting. | Shows sensitivity to ET formulation; not independent validation of a particular PR hazard map. | Requires pinned PET/fitting methods and sensitivity checks; discourages treating every SPEI implementation as interchangeable. |
-| SorÃ­ et al. (2021), [10.3390/ecas2021-10335](https://www.mdpi.com/2673-4931/8/1/40), **proceedings paper** | Mainland PR, 1950-2019; Daymet V4 precipitation/temperature, 1 km; SPEI-1. | Spatial drought-category frequencies, including SPEI-1 <= -1; episode duration, severity and peak. | Compared with documented historical episodes; one-month scale and mainland scope constrain transfer. | Regional precedent for a longer climate-index series. Do not assume its results validate other islands or resolve every drought timescale. |
+| Vicente-Serrano, Beguería & López-Moreno (2010), [10.1175/2009JCLI2909.1](https://doi.org/10.1175/2009JCLI2909.1) | Observatories with different climates; precipitation and temperature/PET inputs; multiple accumulation periods. | SPEI standardizes accumulated precipitation-minus-PET; compares with SPI and sc-PDSI. No universal PR 1/3/5 hazard scale. | Cross-index comparisons and warming experiments; source/PET choice still matters. | Method foundation for an independently computed longer-baseline climate-index branch. Define scale and calibration period before estimating event statistics. |
+| Beguería et al. (2014), [10.1002/joc.3887](https://doi.org/10.1002/joc.3887) | Observational and global gridded climate series; method study rather than a PR mapping resolution. | SPEI fitting, ET methods and temporal weighting; recommends unbiased probability-weighted moments for fitting. | Shows sensitivity to ET formulation; not independent validation of a particular PR hazard map. | Requires pinned PET/fitting methods and sensitivity checks; discourages treating every SPEI implementation as interchangeable. |
+| Sorí et al. (2021), [10.3390/ecas2021-10335](https://www.mdpi.com/2673-4931/8/1/40), **proceedings paper** | Mainland PR, 1950-2019; Daymet V4 precipitation/temperature, 1 km; SPEI-1. | Spatial drought-category frequencies, including SPEI-1 <= -1; episode duration, severity and peak. | Compared with documented historical episodes; one-month scale and mainland scope constrain transfer. | Regional precedent for a longer climate-index series. Do not assume its results validate other islands or resolve every drought timescale. |
 
 ### Puerto Rico planning precedent
 
@@ -35,12 +132,12 @@ For the course, recommend **drought hazard ranking** as the product name. A late
 
 ## 4. Prepare a valid weekly series before summarizing
 
-The following are **project design choices** to implement and test.
+The following **project design choices** govern the implemented weekly series.
 
 1. Preserve the weekly ZIPs and metadata; add `MAP_DATE`, source hash, original CRS, retrieval date, and preparation status. Dates in filenames, effective map dates, metadata creation dates and Thursday release dates are distinct.
 2. Check each file's fields/geometry. Normalize literal `DM` values 0-4; missing/unknown DM is an error to investigate. Verify that the merged product contains exact, non-overlapping classes. If a different source uses nested threshold polygons, convert it explicitly to exact categories; never sum overlapping class areas.
 3. Clip a working copy around PR in the source CRS before projecting large national multipart geometries. Project the subset to EPSG:32161 with a recorded transformation; recompute areas. Preserve repairs and area/geometry change diagnostics.
-4. Establish an **assessed-domain ledger by date and island**, independently of the union of drought polygons. Within a verified assessed domain and a successfully acquired week, land outside D0-D4 polygons can be None. A missing ZIP, unsupported island, or unexplained coverage gap is unknown. Neither the hurricane land mask nor the union of places ever in drought proves assessment coverage. Initially keep Mona unknown unless coverage is established; test mainland, Vieques and Culebra for every historical period too.
+4. Establish an **assessed-domain ledger by date and island**, independently of the union of drought polygons. Within a verified assessed domain and a successfully acquired week, land outside D0-D4 polygons can be None. A missing ZIP, unsupported island, or unexplained coverage gap is unknown. Neither the hurricane land mask nor the union of places ever in drought proves assessment coverage. Test mainland, Vieques and Culebra for every historical period. For out-of-scope Mona, retain mapped observations and unknowns in the audit without requiring complete coverage for this index.
 5. Reuse the shared 250 m grid's CRS, origin, extent, rows, columns and land mask. Rasterize exact classes with **CELL_CENTER** for the first temporal prototype. Compare cell-center and area-fraction assignments on boundary-sensitive weeks before final selection. Do not interpolate DM classes with bilinear/cubic methods.
 6. Use a distinct computational encoding: **None=0, D0=1, D1=2, D2=3, D3=4, D4=5; unknown=255/NoData**. Preserve literal raw DM separately. Thus source `DM=0` is D0, not None; D1-or-worse means encoded value at least 2.
 7. Build an explicit expected-date calendar. A missing week is not a recovery week, a drought-free week, or a value to forward-fill. Default final-ranking eligibility requires all **1,357 valid map observations** at the cell; retain partial-coverage summaries as diagnostics.
@@ -49,7 +146,7 @@ USDM describes broad, transitional conditions. UNL reports that pre-2004 shapefi
 
 ## 5. Recommended multi-year indicators
 
-Let `V(c,t)` identify a valid assessment at cell `c`, map date `t`, and `X(c,t)` be the encoding above. Use each map date once, even if its validity interval crosses a year. The initial cohort has **N=1,357 maps** and **Y=26 years**. These formulas are our proposed implementations, informed by the evidence above.
+Let `V(c,t)` identify a valid assessment at cell `c`, map date `t`, and `X(c,t)` be the encoding above. Use each map date once, even if its validity interval crosses a year. The initial cohort has **N=1,357 maps** and **Y=26 years**. These implemented indicators are informed by the evidence above.
 
 ### Primary: average annual weeks in D1 or worse
 
@@ -67,11 +164,11 @@ A valid cell with no D1 weeks has a real zero indicator; unsupported cells remai
 
 | Indicator | Purpose and interpretation |
 |---|---|
-| D2-or-worse and D3-or-worse occupancy | Tests whether frequent moderate drought and infrequent intense drought give different patterns. |
+| D2-or-worse occupancy | Implemented comparison with the primary D1 indicator; D3-specific occupancy remains a later option. |
 | Number of events/year | Requires a declared recovery-gap rule; one persistent drought must not be counted once per week. |
 | Median/maximum event duration and peak class | Separates persistence from frequency. Flag events truncated by record boundaries or unknown weeks. |
 | Mean ordinal severity | Average encoded 0-5 value over valid weeks; an ordinal burden measure, not equal physical increments of water deficit. |
-| Annual/seasonal occupancy | Tests whether agriculture/water supply sees hazards hidden by all-season averaging. |
+| Annual occupancy | Implemented valid/D1 counts for each calendar year; seasonal summaries remain a later option. |
 
 For event analysis, evaluate the Leeper recovery definition above against strict runs. Retrieve up to three early-2026 recovery weeks **as a separate buffer** when needed to interpret late-2025 events; never add them to the 1,357-map indicator denominator. Events that start before reliable coverage or cannot be shown to terminate are censored.
 
@@ -85,7 +182,7 @@ A state DSCI time series cannot create within-island spatial contrasts. Reconstr
 
 No reviewed source establishes universal Low/Medium/High thresholds for the proposed 2000-2025 `W_D1` surface. USDM instantaneous D1-D4 categories cannot directly classify a multi-year week-count raster.
 
-**Recommended candidate:** fixed relative thirds of `W_D1` over the complete-coverage, shared-grid PR land domain. Calculate the 1/3 and 2/3 quantiles once, record the quantile method (initially NumPy `linear`), domain/grid hash, dates, exact numeric values and units, then freeze them. Do not recompute by municipio or map extent. Suggested boundary convention:
+**Recommended candidate:** fixed relative thirds of `W_D1` over the complete-coverage, population-focused study domain: mainland PR, Vieques and Culebra. Calculate the 1/3 and 2/3 quantiles once, record the quantile method (initially NumPy `linear`), domain/grid hash, dates, exact numeric values and units, then freeze them. Do not recompute by municipio or map extent. Suggested boundary convention:
 
 | Eligible indicator | Rank |
 |---|---:|
@@ -94,16 +191,16 @@ No reviewed source establishes universal Low/Medium/High thresholds for the prop
 | `W_D1 > b2` | 5 |
 | Ineligible coverage or unknown indicator | NoData |
 
-The numeric `b1,b2` cannot be supplied honestly before the spatial indicator exists. If ties collapse the two breakpoints, investigate another fixed classification rather than jittering data or forcing three equal cell counts. Relative high means high **within this domain and period**, not a validated damage threshold. A zero value stays eligible; its class follows the declared fixed rule.
+The current indicator yields candidate `b1=38/26` and `b2=3` weeks/year; see the classification report for exact count boundaries and the measured comparison. These values are not adopted breaks. If ties collapse the two breakpoints after a future input/domain change, investigate another fixed classification rather than jittering data or forcing three equal cell counts. Relative high means high **within this domain and period**, not a validated damage threshold. A zero value stays eligible; its class follows the declared fixed rule.
 
 Compare this candidate with (a) D2-based occupancy and (b) exploratory fixed `W_D1` breaks at **3 and 7 weeks/year**: Low `<=3`, Medium `(3,7]`, High `>7`. The latter adapts selected boundaries from the PR planning draft's five-bin legend; it is **our unvalidated three-bin adaptation**, and its original minimum category remains unresolved. Retain the continuous indicators whichever ranking is chosen.
 
 Before selecting final classes:
 
-- Recompute state/municipio threshold areas for benchmark weeks; compare with cumulative API statistics, accounting for different coastline masks and area methods. A match checks processing consistency, not independent drought skill.
+- Inspect the implemented state threshold-area comparisons for benchmark weeks, accounting for different coastline masks and area methods. Full municipio spatial comparisons remain deferred. A match checks processing consistency, not independent drought skill.
 - Compare the **2015 drought** and later well-documented events with rain/streamflow/reservoir observations and impact records where available. USDM already uses some such inputs; document dependence and avoid calling reused inputs independent validation.
 - Compare recovery rules, D1/D2 thresholds, full versus 2004-onward periods, coastal cell assignment and alternate ranking. Publish a class-transition matrix and changed **land area**, plus rank agreement for continuous fields.
-- Quantify coverage and boundary uncertainty by island; use year/event block resampling for uncertainty rather than treating adjacent weekly maps as independent trials. With 26 years, avoid unsupported long-return-period estimates.
+- Quantify coverage and boundary uncertainty for the inhabited study islands; use year/event block resampling for uncertainty rather than treating adjacent weekly maps as independent trials. With 26 years, avoid unsupported long-return-period estimates.
 - Check exact 250 m alignment, final integer values only 1/3/5, distinct NoData, and NoData propagation in the eventual sum with Hurricane Winds. The summed ranks remain an ordinal screening index.
 
 ## 7. Longer historical branch: realistic options
@@ -119,11 +216,11 @@ For a computed branch, choose SPI-3/SPI-6 or SPEI-3/SPEI-6 for comparison, with 
 ## References: research articles
 
 1. Leeper, R. D., Bilotta, R., Petersen, B., Stiles, C. J., Heim, R., Fuchs, B., Prat, O. P., Palecki, M., & Ansari, S. (2022). Characterizing U.S. drought over the past 20 years using the U.S. drought monitor. *International Journal of Climatology, 42*(12), 6616-6630. [DOI](https://doi.org/10.1002/joc.7653); [NOAA-hosted article](https://repository.library.noaa.gov/view/noaa/48743/noaa_48743_DS1.pdf).
-2. CarrÃ£o, H., Naumann, G., & Barbosa, P. (2016). Mapping global patterns of drought risk: An empirical framework based on sub-national estimates of hazard, exposure and vulnerability. *Global Environmental Change, 39*, 108-124. [DOI](https://doi.org/10.1016/j.gloenvcha.2016.04.012); [repository article](https://ri.conicet.gov.ar/server/api/core/bitstreams/3e3cade0-f4b4-44cd-9cb4-aa3ce5221748/content).
-3. Meza, I., Siebert, S., DÃ¶ll, P., Kusche, J., Herbert, C., Eyshi Rezaei, E., Nouri, H., Gerdener, H., Popat, E., Frischen, J., Naumann, G., Vogt, J. V., Walz, Y., Sebesvari, Z., & Hagenlocher, M. (2020). Global-scale drought risk assessment for agricultural systems. *Natural Hazards and Earth System Sciences, 20*, 695-712. [DOI/article](https://doi.org/10.5194/nhess-20-695-2020).
-4. Vicente-Serrano, S. M., BeguerÃ­a, S., & LÃ³pez-Moreno, J. I. (2010). A multiscalar drought index sensitive to global warming: The standardized precipitation evapotranspiration index. *Journal of Climate, 23*(7), 1696-1718. [DOI](https://doi.org/10.1175/2009JCLI2909.1).
-5. BeguerÃ­a, S., Vicente-Serrano, S. M., Reig, F., & Latorre, B. (2014). Standardized precipitation evapotranspiration index (SPEI) revisited: parameter fitting, evapotranspiration models, tools, datasets and drought monitoring. *International Journal of Climatology, 34*(10), 3001-3023. [DOI](https://doi.org/10.1002/joc.3887).
-6. SorÃ­, R., MÃ©ndez-Tejeda, R., Stojanovic, M., FernÃ¡ndez-Alvarez, J. C., PÃ©rez-AlarcÃ³n, A., Nieto, R., & Gimeno, L. (2021). Spatio-temporal assessment of meteorological drought in Puerto Rico between 1950 and 2019. *Environmental Sciences Proceedings, 8*(1), 40. Proceedings contribution; [DOI](https://doi.org/10.3390/ecas2021-10335).
+2. Carrão, H., Naumann, G., & Barbosa, P. (2016). Mapping global patterns of drought risk: An empirical framework based on sub-national estimates of hazard, exposure and vulnerability. *Global Environmental Change, 39*, 108-124. [DOI](https://doi.org/10.1016/j.gloenvcha.2016.04.012); [repository article](https://ri.conicet.gov.ar/server/api/core/bitstreams/3e3cade0-f4b4-44cd-9cb4-aa3ce5221748/content).
+3. Meza, I., Siebert, S., Döll, P., Kusche, J., Herbert, C., Eyshi Rezaei, E., Nouri, H., Gerdener, H., Popat, E., Frischen, J., Naumann, G., Vogt, J. V., Walz, Y., Sebesvari, Z., & Hagenlocher, M. (2020). Global-scale drought risk assessment for agricultural systems. *Natural Hazards and Earth System Sciences, 20*, 695-712. [DOI/article](https://doi.org/10.5194/nhess-20-695-2020).
+4. Vicente-Serrano, S. M., Beguería, S., & López-Moreno, J. I. (2010). A multiscalar drought index sensitive to global warming: The standardized precipitation evapotranspiration index. *Journal of Climate, 23*(7), 1696-1718. [DOI](https://doi.org/10.1175/2009JCLI2909.1).
+5. Beguería, S., Vicente-Serrano, S. M., Reig, F., & Latorre, B. (2014). Standardized precipitation evapotranspiration index (SPEI) revisited: parameter fitting, evapotranspiration models, tools, datasets and drought monitoring. *International Journal of Climatology, 34*(10), 3001-3023. [DOI](https://doi.org/10.1002/joc.3887).
+6. Sorí, R., Méndez-Tejeda, R., Stojanovic, M., Fernández-Alvarez, J. C., Pérez-Alarcón, A., Nieto, R., & Gimeno, L. (2021). Spatio-temporal assessment of meteorological drought in Puerto Rico between 1950 and 2019. *Environmental Sciences Proceedings, 8*(1), 40. Proceedings contribution; [DOI](https://doi.org/10.3390/ecas2021-10335).
 
 The [course guidelines](../references/SDSS%20Final%20Project%20Fall%202026.pdf) govern final grid/ranking and reporting requirements. The source register below retains the acquisition references.
 
@@ -132,15 +229,15 @@ The [course guidelines](../references/SDSS%20Final%20Project%20Fall%202026.pdf) 
 
 The `_M` files are merged-class **weekly national** GIS polygons, not monthly maps. DM=0–4 represents D0–D4; the source does not contain a separate None polygon, SPI/SPEI, rainfall, exposure or vulnerability. The supplied 40-week 2026 sample remains unchanged for reference and is not a model input by default. Its dates are outside the historical indicator, except for the separately labeled recovery buffers.
 
-Actual sample projection files specify WGS84 despite older/general metadata describing Albers. Inspect every file's actual CRS, use Project and recompute areas. Preserve MAP_DATE from the checked archive/member identity. Stored Shape_Area/Shape_Leng must not be assumed to describe current projected PR area.
+Actual sample projection files specify WGS84 despite older/general metadata describing Albers. The processing model inspects each file's CRS, projects the clipped geometry and computes areas from the resulting shapes. It carries the map date from the checked archive and member identity.
 
-Fetch national weekly ZIPs from the catalog and annual chunks of state cumulative/category area %, DSCI and all 78 municipios' category area %. Statistics use Accept: application/json; archives use */* (application/zip previously returned 406). No token is required by the tested public services. Filter returned overlapping validity intervals by explicit Tuesday map dates, then sort/deduplicate. Empty threshold queries do not prove a complete calendar or None conditions. Keep original bodies, immutable receipts and SHA-256 hashes; cache indexes may change to point at relocated objects.
+The fetch tool reads the national weekly ZIP catalog and requests Puerto Rico statistics in annual chunks. It uses `Accept: application/json` for statistics and `*/*` for archives. It filters responses with overlapping validity intervals to the expected Tuesday dates, then sorts and deduplicates the records. The complete calendar check uses those dates and the saved ZIPs. Cache indexes can point to relocated objects while the original bodies, receipts and SHA-256 hashes are preserved.
 
 The full cohort has 1,357 baseline maps (2000-01-04–2025-12-30), 3 end buffers, 654,160 normalized reference rows and 231 retained warnings. The unavailable pre-USDM start buffers require left-censoring flags. Buffer dates never enter the 26-year/1,357-week denominator. The GIS archive is about 1.53 GB compressed; keep one cache. Typed statistics/QC tables are primary in ArcGIS. Standard-Python execution uses CSV as its primary representation. Optional additional CSV export is off by default in ArcGIS. Validation reproduces actual retained table values from frozen API responses.
 
 Use NDMC/UNL, USDA, NOAA and NASA attribution as required by the [provider permission statement](https://droughtmonitor.unl.edu/About/Permission.aspx); inspect the frozen statement in the acquisition manifest before distribution.
 
-## 2. Findings that refine the next processing stage
+## Historical acquisition findings used by processing
 
 ### Historical records are not always one feature per class
 
@@ -150,14 +247,14 @@ finding, not proof of overlapping categories or corruption. Do not assume five
 rows per file, interpret each feature as a separate drought event, or add
 same-class geometries without resolving their spatial relationship.
 
-**Preparation change:** after a bounded PR clip, preserve feature lineage, check
-geometry and dissolve/union by **map date and DM**. Check cross-category overlaps
-separately. A union within one class prevents duplicated same-class area from
-inflating area summaries. Keep the original ZIP untouched.
+**Implemented processing:** after clipping, the tool preserves source-record lineage,
+checks geometry, dissolves polygons by **map date and DM**, and checks cross-category
+overlap. Dissolving prevents duplicated same-class area from inflating area summaries.
+The original ZIP remains available for audit.
 
 ### Culebra explains why API statistics need quality flags
 
-The acquisition retained **231 warnings**:
+The validated acquisition retains **231 warnings**:
 
 - **225** multiple-DM-feature source-layout warnings.
 - **4** categorical-total disagreements: the two previously observed PR records
@@ -165,28 +262,29 @@ The acquisition retained **231 warnings**:
 - **2** state cumulative-versus-categorical disagreements.
 
 For **2015-08-04 and 2015-08-11**, Culebra (`72049`) reports both **None=100%** and
-**D2=100%** in the categorical API response, totaling 200%. The spatial pilot
+**D2=100%** in the categorical API response, totaling 200%. The spatial evaluation
 places the Culebra control inside a **D2** polygon on both dates. The state-level
 categorical totals also disagree on these dates. These observations justify
 flagging reference data, but do not establish the underlying provider error's
 cause.
 
-**Preparation change:** derive spatial category assignments from the polygons
-and a documented assessment domain. Use API statistics as diagnostic benchmarks,
-with these records explicitly flagged. Do not use a municipio's None percentage
-as a spatial fill rule or silently delete these severe-drought observations.
+**Implemented processing:** the spatial model derives category assignments from
+the polygons and the documented assessment domain. The API records remain flagged
+and available as reference diagnostics. The polygon evidence preserves the D2
+observations at the Culebra control.
 
 ### Mona is present in historical drought geometry
 
 The 2026 sample alone had no DM matches at the Mona control. The fetched 2015
-files explicitly place it in **D0**, confirming that Mona cannot be excluded
-merely because recent dry-category polygons miss it. Raw `DM=0` means **D0**;
-it must not be mistaken for the separate None state.
+files explicitly place it in **D0**. These sparse observations remain useful
+for auditing source interpretation outside the population-focused index scope.
+Raw `DM=0` means **D0**; it must not be mistaken for the separate None state.
 
-**Coverage change:** assess island/domain continuity across dates, rather than
-assigning a blanket status from the 2026 sample or the union of drought polygons.
-Some historical geometry includes Mona; a complete 26-year assessed-domain
-ledger remains to be established.
+**Audit treatment:** retain the island/date ledger rather than assigning a
+blanket drought-free status from the 2026 sample or the union of drought polygons.
+Mona has 0-39 observed baseline states per cell; its remaining states stay unknown.
+This sparse coverage is expected for an island outside the people-focused index
+and does not require resolution before proceeding with the study islands.
 
 ### A valid no-drought week can have an empty PR clip
 
@@ -200,7 +298,7 @@ acquired week, convert land outside all D0-D4 polygons to **None=0**. Keep unkno
 coverage and ocean as NoData. Otherwise normal weeks would incorrectly disappear
 from the denominator and break duration calculations.
 
-## 3. ArcPy rasterization feasibility experiment
+## Earlier ArcPy rasterization feasibility experiment
 
 A previous six-week feasibility experiment examined:
 
@@ -223,39 +321,28 @@ numbers encode drought categories; course hazard ranks are a separate later
 transformation. They are not usable as complete weekly input states for a final
 frequency surface.
 
-## 4. Readiness decisions
+## Current readiness
 
-| Next action | Assessment | Required work |
-|---|---|---|
-| Controlled weekly-raster prototype | **Ready**; actual six-week feasibility passed | Make source/domain normalization explicit and retain diagnostic coverage. |
-| Full weekly-state raster series | **Ready to implement, not yet complete** | Verify assessed-domain/island continuity; union same-class pieces; run per-date PR topology checks; fill valid None separately from unknown. |
-| Frequency and duration over all 26 years | **Method specified, input series not ready for production** | Complete weekly-state series and valid-count ledger; test temporal state transitions and censoring. |
-| Final Low/Medium/High hazard ranks | **Not ready to calculate final classes** | Evaluate continuous indicators, sensitivities and observed-event comparisons, then freeze numeric breakpoints. |
-| Risk/loss estimation beyond the course hazard index | **Additional study needed** | Sector-specific exposure and vulnerability, not supplied by the USDM polygons. |
+The complete weekly states, frequency/occupancy and both event-rule summaries
+have passed the saved processing model's computational checks. Review the
+continuous fields, recovery/period sensitivities and coverage assumptions before
+choosing final Low/Medium/High thresholds. Mona is an expected out-of-scope audit
+case and does not block that work.
+Sector-specific risk or loss estimation still needs exposure and vulnerability
+data beyond the USDM polygons.
 
-Use a common byte encoding for the eventual complete states:
-**None=0, D0=1, D1=2, D2=3, D3=4, D4=5, unknown=255**. Every threshold predicate
-must require validity and the upper bound `<=5`, so the unknown sentinel cannot
-be counted as an extreme drought. A valid zero remains in the denominator.
-
-For complete coverage, estimate primary D1-or-worse occupancy as
-`N_D1 / 1357` and average annual weeks as `N_D1 / 26`. These are equivalent
-summaries on the complete cohort; do not double-weight both. Compare D2
-occupancy, persistence and the strict versus three-week-recovery event rules.
-Keep buffers out of occupancy denominators and retain censored-event flags.
-
-## 5. Three tools versus three scientific phases
+## Three tools versus three scientific phases
 
 The implemented **three-part acquisition model** is:
 
 **Plan Drought Download -> Fetch Drought Data -> Validate Drought Download.**
 
-For the complete SDSS drought branch, organize the later work into three broader
-phases:
+The complete SDSS drought branch has three broader scientific phases:
 
 1. **Acquire and audit:** the three tools above.
-2. **Prepare weekly states and estimate historical hazard:** rasterization,
-   frequency/occupancy, event duration, peak class, coverage and uncertainty.
+2. **Prepare weekly states and estimate historical hazard:** the implemented
+   processing model calculates frequency/occupancy, event duration, peak class
+   and coverage, then evaluates computational consistency and spatial sensitivity.
 3. **Evaluate and classify the hazard indicator:** select/freeze the 1/3/5
    crosswalk, test an alternative, and integrate aligned ranked layers into the
    course screening index.

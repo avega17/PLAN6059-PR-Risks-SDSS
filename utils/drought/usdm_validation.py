@@ -102,7 +102,9 @@ def validate_drought_download(download_manifest, output_folder):
         report.update(baseline_maps=plan['baseline_count'],buffer_maps=len(expected)-plan['baseline_count'],
             mode=plan['mode'],year_count=plan['year_count'],normalized_rows=expected_rows,
             reference_warning_count=len(manifest['warnings']),source_crs_variants=sorted(projections),
-            outstanding=['Verify historical assessed-domain/island coverage, especially Mona.',
+            index_scope=['mainland','Vieques','Culebra'],
+            scope_exclusions={'Mona':'Outside the people-focused index; sparse observations are an expected edge case.'},
+            outstanding=['Verify historical assessed-domain coverage for mainland, Vieques and Culebra.',
                 'Check polygon topology and actual ArcPy projection/repair behavior before temporal rasters.',
                 'None=0, D0=1,...,D4=5; unknown=255 must be masked out of threshold calculations.',
                 'Frequency and event duration are hazard metrics; final ranking follows their evaluation.'])
@@ -114,4 +116,210 @@ def validate_drought_download(download_manifest, output_folder):
     if not report['passed']:
         raise DroughtAcquisitionError(f'Download validation failed. Review {report_path}')
     return report
+
+
+def evaluate_drought_metrics(metrics_catalog):
+    """Check actual states/metrics and compare geometry without selecting ranks."""
+    import arcpy
+    import numpy as np
+    import tempfile
+    from .usdm_spatial import (load_workspace, settings_table, mark_report, dataset_fingerprint,
+                               table, BENCHMARK_DATES, _islands)
+    from .usdm_metrics import occupancy
+    from ..hurricane.validation import _raster_info, grid_errors
+    workspace = str(Path(metrics_catalog).resolve().parent)
+    settings = settings_table(workspace)
+    mark_report(settings,'CHECKING_METRICS')
+    try:
+        workspace, settings, grid, cube, island = load_workspace(workspace,True)
+    except Exception as error:
+        mark_report(settings,'FAILED',error=str(error))
+        raise
+    mark_report(settings,'EVALUATING')
+    try:
+        if Path(metrics_catalog).resolve() != Path(workspace)/'metric_catalog':
+            raise ValueError('Use the Metrics Catalog produced by Calculate Drought Metrics.')
+        if dataset_fingerprint(workspace) != settings['metrics_sha256']:
+            raise ValueError('Metric tables or rasters changed; recalculate metrics.')
+        count = settings['baseline_count']
+        expected = occupancy(cube,count,26)
+        check_arrays = dict(N_VALID=expected['nvalid'],N_D1=np.where(expected['eligible'],expected['d1'],np.nan),
+            W_D1=expected['wd1'],W_D2=expected['wd2'],ORDINAL_BURDEN=expected['burden'])
+        with arcpy.da.SearchCursor(str(metrics_catalog),['DATASET']) as cursor:
+            names = [r[0] for r in cursor]
+        for name in names:
+            if Path(name).name != name: raise ValueError('Catalog dataset must be inside its processing geodatabase.')
+            path = str(Path(workspace)/name)
+            info = _raster_info(arcpy,path)
+            errors = grid_errors(info,info,grid['extent'],grid['rows'],grid['columns'])
+            if errors: raise ValueError('; '.join(errors))
+            values = arcpy.RasterToNumPyArray(path,nodata_to_value=-9999).astype(float)
+            if np.any(values[island==0] != -9999): raise ValueError(name+': exterior cells must remain NoData.')
+            if name in check_arrays:
+                target = np.where(np.isfinite(check_arrays[name]) & (island>0),check_arrays[name],-9999)
+                if not np.allclose(values,target,rtol=0,atol=1e-9): raise ValueError(name+': indicator differs from weekly states.')
+            if name != 'N_VALID' and name != 'W_D1_2004' and np.any(values[(island>0)&~expected['eligible']] != -9999):
+                raise ValueError(name+': incomplete baseline coverage received a full-period indicator.')
+        # Annual normalized rows must reproduce the cube, including 52/53-map years.
+        years = np.array([int(d[:4]) for d in settings['dates'][:count]])
+        year_counts = {y:int(np.sum(years==y)) for y in range(2000,2026)}
+        annual_valid = np.array([(cube[:count][years==y] <= 5).sum(axis=0) for y in range(2000,2026)])
+        annual_dry = np.array([((cube[:count][years==y] >= 2)&(cube[:count][years==y] <= 5)).sum(axis=0) for y in range(2000,2026)])
+        seen = np.zeros((26,grid['rows'],grid['columns']),bool)
+        with arcpy.da.SearchCursor(str(Path(workspace)/'annual_cell_metrics'),
+                                  ['CELL_ID','YEAR','N_EXPECTED','N_VALID','N_D1']) as cursor:
+            for cell,year,n,v,d in cursor:
+                r,c = divmod(cell,grid['columns']);y=year-2000
+                if (not 0<=y<26 or not 0<=r<grid['rows'] or not 0<=c<grid['columns'] or island[r,c]==0
+                        or seen[y,r,c] or n!=year_counts[year]
+                        or v!=annual_valid[y,r,c] or d!=annual_dry[y,r,c]):
+                    raise ValueError('Annual cell table differs from the calendar/cube.')
+                seen[y,r,c]=True
+        if not np.all(seen[:,island>0]) or np.any(seen[:,island==0]):
+            raise ValueError('Annual table has missing or extra land-cell/year rows.')
+        del annual_valid,annual_dry,seen
+        _check_cell_metrics(arcpy,workspace,cube,island,grid,settings)
+        with tempfile.TemporaryDirectory(prefix='sdss_drought_evaluate_') as temporary:
+            scratch = str(Path(temporary)/'evaluation.gdb')
+            try:
+                arcpy.management.CreateFileGDB(temporary,'evaluation.gdb')
+                current,geometries,controls = _islands(arcpy,grid,scratch)
+                if not np.array_equal(current,island): raise ValueError('Current island geometry differs from prepared state allocation.')
+                controls_result = []
+                for day in ('2015-08-04','2015-08-11'):
+                    point = controls['Culebra'].firstPoint
+                    c=int((point.X-grid['extent']['xmin'])/250);r=int((grid['extent']['ymax']-point.Y)/250)
+                    code=int(cube[settings['dates'].index(day),r,c])
+                    if code != 3: raise ValueError(f'Culebra {day}: expected D2 polygon assignment, got encoded {code}.')
+                    controls_result.append(dict(date=day,island='Culebra',code=code))
+                zero = cube[settings['dates'].index('2000-01-04')]
+                if not np.all(zero[(island>=1)&(island<=3)]==0):
+                    raise ValueError('The valid no-drought benchmark must retain assessed land as None=0.')
+                _spatial_comparisons(arcpy,workspace,grid,settings,cube,island,geometries,scratch)
+            finally:
+                arcpy.management.ClearWorkspaceCache()
+        coverage = {name:dict(land_cells=int(np.sum(island==region)),
+            complete_cells=int(np.sum((island==region)&expected['eligible'])),
+            min_valid=int(expected['nvalid'][island==region].min()),
+            max_valid=int(expected['nvalid'][island==region].max()))
+            for region,name in enumerate(('mainland','Vieques','Culebra','Mona'),1)}
+        if any(coverage[name]['complete_cells'] != coverage[name]['land_cells'] for name in ('mainland','Vieques','Culebra')):
+            raise ValueError('Declared assessed primary islands lack complete baseline states.')
+        settings.update(stage='VALIDATED',evaluation_software_sha256=sha256(__file__))
+        settings_table(workspace,settings)
+        primary=str(Path(workspace)/'W_D1');valid=str(Path(workspace)/'N_VALID')
+        mark_report(settings,'VALIDATED',computational_checks_passed=True,ranking_status='NOT_SELECTED',
+            metrics_sha256=settings['metrics_sha256'],evaluation_software_sha256=settings['evaluation_software_sha256'],
+            baseline_maps=1357,buffer_maps=3,year_count=26,coverage=coverage,
+            index_scope=['mainland','Vieques','Culebra'],
+            scope_exclusions={'Mona':'Outside the people-focused index; sparse observations are an expected edge case. Unobserved states remain unknown and full-period indicators remain NoData.'},
+            primary_indicator=primary,valid_count=valid,metrics_catalog=str(Path(workspace)/'metric_catalog'),
+            source_warning_count=len(read_json(settings['manifest'])['warnings']),culebra_controls=controls_result,
+            limitations=['Generalized Natural Earth coastline within the declared study domain.',
+                         'Source-consistency checks do not establish independent drought skill.',
+                         'Completed duration summaries exclude censored events and use baseline spans.',
+                         '250 m output alignment is not 250 m meteorological information support.'])
+        arcpy.AddMessage('Drought indicators validated for classification review; no ranking thresholds have been selected.')
+        arcpy.AddMessage('Mona is outside the people-focused index; sparse observations are an expected edge case, retained as unknown/NoData.')
+        return {'primary':primary,'valid_count':valid,'report':settings['validation_report']}
+    except Exception as error:
+        mark_report(settings,'FAILED',error=str(error))
+        raise
+
+
+def _check_cell_metrics(arcpy,workspace,cube,island,grid,settings):
+    """Read the normalized cell table and check basic counts/duration semantics."""
+    import numpy as np
+    fields=['CELL_ID','N_VALID','N_EXPECTED','COVERAGE_FRACTION','N_D1_OBS','N_D2_OBS','W_D1','F_D1','ORDINAL_BURDEN']
+    fields += [f'{n}_{rule}W' for rule in (3,1) for n in ('EVENTS','COMPLETE','LEFT_CENS','RIGHT_CENS','MEDIAN_SPAN','MAX_SPAN')]
+    seen=set()
+    with arcpy.da.SearchCursor(str(Path(workspace)/'cell_metrics'),fields) as cursor:
+        for cell,nvalid,nexpected,fraction,d1,d2,wd1,fd1,burden,*events in cursor:
+            r,c=divmod(cell,grid['columns'])
+            if (cell in seen or not 0<=r<grid['rows'] or not 0<=c<grid['columns'] or island[r,c]==0
+                    or not 0<=d2<=d1<=nvalid<=1357 or nexpected!=1357
+                    or abs(fraction-nvalid/1357)>1e-12): raise ValueError('Invalid/duplicate normalized cell counts or coverage.')
+            seen.add(cell)
+            if nvalid==1357:
+                if abs(wd1-d1/26)>1e-9 or abs(fd1-100*d1/1357)>1e-9 or not 0<=burden<=500:
+                    raise ValueError('Normalized indicator or denominator is invalid.')
+            elif any(v is not None for v in (wd1,fd1,burden)):
+                raise ValueError('Incomplete cell has full-period normalized metrics.')
+            for offset in (0,6):
+                n,complete,left,right,median,maximum=events[offset:offset+6]
+                if (not 0<=complete<=n or not 0<=left<=n or not 0<=right<=n
+                        or (complete==0 and (median is not None or maximum is not None))
+                        or (complete>0 and not 1<=median<=maximum<=1357)):
+                    raise ValueError('Event counts, censor flags or completed-duration values are invalid.')
+    if len(seen) != int(np.sum(island>0)): raise ValueError('Cell metric table is incomplete.')
+
+
+def _spatial_comparisons(arcpy,workspace,grid,settings,cube,island,geometries,scratch):
+    """Exact land-area assignment comparison, including the None remainder.
+
+    A positive PolygonToRaster priority is not a tie-only area rule. Intersect
+    the fishnet explicitly and choose the largest combined category area.
+    """
+    import numpy as np
+    from datetime import datetime
+    from .usdm_spatial import table,BENCHMARK_DATES
+    primary=geometries['mainland'].union(geometries['Vieques']).union(geometries['Culebra'])
+    total_area=primary.getArea('GEODESIC','SQUAREKILOMETERS')
+    fish=str(Path(scratch)/'cells')
+    e=grid['extent']
+    with arcpy.EnvManager(outputCoordinateSystem=arcpy.SpatialReference(32161),extent=None,mask=None):
+        arcpy.management.CreateFishnet(fish,f'{e["xmin"]} {e["ymin"]}',f'{e["xmin"]} {e["ymin"]+250}',
+                                      250,250,grid['rows'],grid['columns'],'','NO_LABELS','','POLYGON')
+    arcpy.management.AddField(fish,'CELL_ID','LONG')
+    with arcpy.da.UpdateCursor(fish,['SHAPE@','CELL_ID']) as cursor:
+        for geometry,_ in cursor:
+            xy=geometry.trueCentroid
+            c=int((xy.X-e['xmin'])/250);r=int((e['ymax']-xy.Y)/250)
+            cursor.updateRow((geometry,r*grid['columns']+c))
+    # Only cells whose centers belong to the declared primary islands.
+    row,col=np.nonzero((island>0)&(island<4));primary_ids=row*grid['columns']+col
+    references={}
+    with normalized_reader(read_json(settings['manifest'])['statistics'],STAT_SCHEMA) as rows:
+        for r in rows:
+            day=r['MAP_DATE'].date().isoformat()
+            if day in BENCHMARK_DATES and r['GEO_TYPE']=='STATE' and r['STAT_FORMAT']=='CUMULATIVE':
+                references[(day,r['CATEGORY'])]=r['VALUE']
+    comparison,area_rows=[],[]
+    for day in BENCHMARK_DATES:
+        arcpy.AddMessage('Spatial assignment/reference comparison: '+day)
+        with arcpy.da.SearchCursor(str(Path(workspace)/'pr_weekly_polygons'),['MAP_DATE','DM','SHAPE@']) as cursor:
+            polygons=[(int(dm),g.intersect(primary,4)) for stamp,dm,g in cursor
+                      if stamp.date().isoformat()==day]
+        polygons=[(dm,g) for dm,g in polygons if g.area>0]
+        union=None
+        for _,g in polygons: union=g if union is None else union.union(g)
+        none=primary if union is None else primary.difference(union)
+        categories=str(Path(scratch)/'categories');intersection=str(Path(scratch)/'category_cells')
+        for path in (categories,intersection):
+            if arcpy.Exists(path): arcpy.management.Delete(path)
+        arcpy.management.CreateFeatureclass(scratch,'categories','POLYGON',spatial_reference=arcpy.SpatialReference(32161))
+        arcpy.management.AddField(categories,'X_CODE','SHORT')
+        with arcpy.da.InsertCursor(categories,['X_CODE','SHAPE@']) as cursor:
+            if none.area: cursor.insertRow((0,none))
+            for dm,g in polygons: cursor.insertRow((dm+1,g))
+        arcpy.analysis.PairwiseIntersect([fish,categories],intersection)
+        areas=np.zeros((6,grid['rows']*grid['columns']))
+        with arcpy.da.SearchCursor(intersection,['CELL_ID','X_CODE','SHAPE@AREA']) as cursor:
+            for cell,code,area in cursor: areas[code,cell]+=area
+        # Reversed argmax resolves exact equal-area ties toward higher category.
+        assigned=5-np.argmax(areas[::-1],axis=0)
+        if np.any(areas[:,primary_ids].sum(axis=0)<=0): raise ValueError('Area comparison lost a primary-land cell.')
+        index=settings['dates'].index(day);current=cube[index,row,col]
+        different=assigned[primary_ids]!=current
+        land_areas=areas[:,primary_ids].sum(axis=0)
+        comparison.append((datetime.fromisoformat(day),len(primary_ids),int(different.sum()),
+                           100*float(np.mean(~different)),float(land_areas[different].sum()/1e6)))
+        for dm in range(5):
+            polygon_percent=100*sum(g.getArea('GEODESIC','SQUAREKILOMETERS') for d,g in polygons if d>=dm)/total_area
+            raster_percent=100*float(np.mean((current>=dm+1)&(current<=5)))
+            area_rows.append((datetime.fromisoformat(day),dm,polygon_percent,raster_percent,references[(day,'D'+str(dm))]))
+    table(workspace,'cell_assignment_comparison',[('MAP_DATE','DATE',None),('LAND_CELLS','LONG',None),
+        ('CHANGED_CELLS','LONG',None),('AGREEMENT_PCT','DOUBLE',None),('CHANGED_LAND_KM2','DOUBLE',None)],comparison)
+    table(workspace,'area_reference_comparison',[('MAP_DATE','DATE',None),('MIN_DM','SHORT',None),
+        ('POLYGON_PERCENT','DOUBLE',None),('GRID_PERCENT','DOUBLE',None),('API_PERCENT','DOUBLE',None)],area_rows)
 

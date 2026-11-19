@@ -1,8 +1,65 @@
 # Hurricane Winds processing plan
 
-The preparation workflow and the three wind-benchmark Script Tools are implemented. The benchmark produced 16 peak-wind rasters for four storms and four size scenarios, with all proposed five-to-2.5-minute convergence checks passing. Individual Script Tool execution, 13 offline regression tests and a relocated-package run have passed. The separate wind ModelBuilder canvas still needs assembly and saved-model execution; follow the [setup guide](hurricane_modelbuilder_setup.md).
+The hurricane toolbox contains the saved preparation and wind-benchmark models. The benchmark produces 16 peak-wind rasters for four storms and four size scenarios. All proposed five-to-2.5-minute convergence checks pass on those cases. The [setup guide](hurricane_modelbuilder_setup.md) shows how to open and run both models.
 
 This establishes a working computational benchmark. Comparable station validation, a paired CLIMADA comparison, historical coverage accounting and selection of the historical size configuration remain open. Full-period event rates and 1/3/5 classification follow those evaluation decisions.
+
+The [classification report](hurricane_classification_report.md) separates essential historical-production decisions from optional evaluation improvements, compares ranking candidates and outlines the remaining course deliverables. No historical configuration or rank crosswalk has been adopted.
+
+## Discussing the saved hurricane preparation model
+
+**HurricaneWinds_Fetch_IBTrACS** turns the supplied IBTrACS points into auditable storm tracks and builds the shared grid. The two branches meet at **Validate Prototype**. Each arrow into that check represents a file passed by the saved model. See the [setup guide](hurricane_modelbuilder_setup.md#hurricane-preparation-overview) for the full tool diagrams and parameter values.
+
+```mermaid
+flowchart TD
+    Raw["Local IBTrACS points + preparation folder"] --> Prep["Prepare Hurricane Data"]
+    Boundary["Grid folder + optional boundary"] --> Grid["Establish Reference Grid"]
+    Prep --> Obs["Prepared Observations<br/>62,485 points · 1,143 storms"]
+    Prep --> Manifest["Prepare Manifest<br/>Internal JSON"]
+    Grid --> Mask["Reference Raster + Study Mask<br/>Shared 250 m grid"]
+    Grid --> Spec["Grid Specification<br/>JSON, also a model output"]
+    Manifest --> Check["Validate Prototype"]
+    Spec --> Check
+    Reports["Validation folder"] --> Check
+    Check --> Ready["Validated Hurricane Data<br/>JSON for Prepare Wind Inputs"]
+```
+
+[Download the hurricane preparation diagram as a PNG](../figures/discussion/hurricane_preparation.png).
+
+| Stage | What to point out in the discussion |
+| --- | --- |
+| **Prepare Hurricane Data** | Takes a local `.shp` and its sidecars. Optional track lines and SPC reports go into the source inventory. The tool checks the originals, stages safe filenames and uses **Copy Features** to preserve a raw geodatabase copy. Python selects main tracks by stored **1955–2025 season**, normalizes missing values and checks storm ID/timestamp duplicates. ArcPy writes the feature geometry using `USA_LON`/`USA_LAT`, paired with `USA_WIND`. |
+| **Establish Reference Grid** | Uses a supplied polygon or the pinned Natural Earth boundary. **Project** puts the boundary in EPSG:32161. **Polygon To Raster** assigns land by cell center, with NoData outside the mask. The reference raster, mask and grid specification give both hazards the same origin, extent and **1,140 × 267** layout. |
+| **Validate Prototype** | Reads the preparation manifest and grid specification. It checks original hashes, row accounting, point geometry, grid alignment, island controls and exterior NoData. The public **Validated Hurricane Data** file gives wind preparation a verified route to the point data. The **Grid Specification** is the other data input to wind preparation. |
+
+- **Why keep whole tracks?** Offshore points and weaker stages carry the position and timing context for wind reconstruction. Preparation keeps those portions and applies the Puerto Rico mask to the grid branch. The snapshot reconciles **128,098 source points** to **62,485 prepared observations** across **1,143 distinct storms**.
+- **What is measured at a track point?** `USA_WIND` is a storm-wide maximum one-minute sustained wind in knots. It takes the later HURRECON step to estimate local winds at study cells. Preparation carries interpolation flags and preserves the **85 missing wind values** for coverage review.
+- **What can you open during the discussion?** Show Prepared Observations in `hurricane_prepare.gdb`, then open `grid_spec.json` to show the projection and cell geometry. The five public outputs are Prepared Observations, Reference Raster, Study Mask, Grid Specification and Validated Hurricane Data (`validation_report.json`). The original-point copy, storm summary, quality-control table and projected boundary are accessible through the workspace and manifests. The 250 m grid defines output alignment. Local wind estimates have coarser information support.
+
+## Discussing the saved wind processing model
+
+**HurricaneWinds_Estimate_Winds** takes the validated track handoff, the shared grid specification and an output folder. It benchmarks Betsy, Hugo, Georges and Maria at four storm sizes. The Wind Field Catalog is both a public output and the connected input to the evaluation tool. See the [wind setup guide](hurricane_modelbuilder_setup.md#hurricane-wind-processing-overview) for the tool algorithms and parameter values.
+
+```mermaid
+flowchart TD
+    Inputs["Validated Hurricane Data + Grid Specification<br/>Wind Output Folder"] --> Prepare["Prepare Wind Inputs"]
+    Prepare --> Workspace["Wind Workspace · internal<br/>Storm tracks, grid centers and size scenarios"]
+    Workspace --> Estimate["Estimate Wind Fields"]
+    Estimate --> Peaks["Geodatabase peak wind rasters<br/>16 in the default benchmark"]
+    Estimate --> Catalog["Wind Field Catalog · public output<br/>Links each storm and size scenario to its raster"]
+    Catalog --> Evaluate["Evaluate Wind Estimates"]
+    Evaluate --> Outputs["Wind Benchmark Summary<br/>Validated Wind Benchmark"]
+```
+
+[Download the wind processing diagram as a PNG](../figures/discussion/hurricane_wind_processing.png).
+
+| Stage | What to point out in the discussion |
+| --- | --- |
+| **Prepare Wind Inputs** | Checks the prepared tracks and grid, selects the four benchmark storms, and uses **Project** to express study-cell centers in WGS84 for the wind calculations. The internal Wind Workspace holds the full tracks, cell locations and size scenarios. |
+| **Estimate Wind Fields** | Interpolates supported track intervals and uses the HURRECON equations to calculate sustained wind at each cell center. It retains one peak per storm, size scenario and cell. The tool compares maximum sampling steps of **15, 5 and 2.5 minutes** and writes the **5-minute runs' peak rasters**. Those steps are evaluation intervals for the modeled one-minute sustained wind. |
+| **Evaluate Wind Estimates** | Reads the catalog and verifies the rasters, grid and coverage. It checks time-step convergence and compares modeled threshold radii with available IBTrACS quadrant radii. A compatible station table can add comparisons with observed winds. The tool returns a summary table and updates the validation JSON. |
+
+The default run writes **16 modeled storm/scenario peak rasters** in `hurricane_winds.gdb`. The benchmark helps assess model settings before historical frequency analysis. The 250 m cells locate the model estimates on the shared grid, while the track observations and model assumptions govern the information they carry.
 
 ## IBTrACS preparation contract
 
@@ -183,7 +240,7 @@ The report's performance claim requires a paired model experiment. Our local imp
 | Article | Data and spatial support | Indicator/model and thresholds | Evaluation and transfer to this project |
 |---|---|---|---|
 | Boose, E.R., Serrano, M.I. & Foster, D.R. (2004), *Landscape and regional impacts of hurricanes in Puerto Rico*, Ecological Monographs 74, 335-352. [DOI](https://doi.org/10.1890/02-4057) | HURDAT and historical damage; 43 reconstructed storms, 1851-1997; regional modeling at 3 km and finer damage/exposure analyses | HURRECON sustained wind, gust and Fujita damage; four size/profile combinations | Seven storms informed parameterization; 36 others supported independent damage comparison. Supplies equations and sensitivity cases. Damage recurrence and local wind-force frequency need separate interpretation. |
-| Van Beusekom, A.E., Alvarez-Berrios, N.L., Gould, W.A., Quinones, M. & Gonzalez, G. (2018), *Hurricane Maria in the U.S. Caribbean: Disturbance Forces, Variation of Effects, and Implications for Future Storms*, Remote Sensing 10, 1386. [DOI](https://doi.org/10.3390/rs10091386) | Maria/Irma NWS forecasts; MODIS 250 m EVI; 30 m terrain summarized at target cells | Fitted HURRECON profiles, 10-minute winds, terrain sheltering and gale-wind energy above 17 m/s | Vegetation/landslide response models evaluated against observed effects. Supports a process-based 250 m calculation; canopy response also depends on landscape properties. |
+| Van Beusekom, A.E., Alvarez-Berrios, N.L., Gould, W.A., Quinones, M. & Gonzalez, G. (2018), *Hurricane Maria in the U.S. Caribbean: Disturbance Forces, Variation of Effects, and Implications for Future Storms*, Remote Sensing 10, 1386. [DOI](https://doi.org/10.3390/rs10091386) | Maria/Irma NWS forecasts; MODIS 250 m EVI; 30 m terrain summarized at target cells | Fitted HURRECON profiles, 10-minute field time steps, terrain sheltering and gale-wind energy above 17 m/s | Vegetation/landslide response models evaluated against observed effects. Supports a process-based 250 m calculation; canopy response also depends on landscape properties. |
 | Cannon, J.B., Peterson, C.J., Godfrey, C.M. & Whelan, A.W. (2023), *Hurricane wind regimes for forests of North America*, PNAS 120, e2309076120. [DOI](https://doi.org/10.1073/pnas.2309076120) | Western North Atlantic/eastern North Pacific tracks, 1851-2022; 886 selected hurricanes | HURRECON wind fields, estimated storm size, wind-threshold recurrence and regional regimes | Includes HRRR model comparison and uncertainty in radius prediction. Supports multi-event wind analysis and the need to evaluate size assumptions; an external model comparison has different information support from station measurements. |
 | Holland, G.J. (2008), *A revised hurricane pressure-wind model*, Monthly Weather Review 136, 3432-3445. [DOI](https://doi.org/10.1175/2008MWR2395.1) | Hurricane pressure, wind and motion data | Pressure-wind relationship underlying the H08 alternative | Explains physical inputs and historical pressure uncertainty. Useful for evaluating an alternative model; our local field inventory determines actual pressure availability. |
 | Aznar-Siguan, G. & Bresch, D.N. (2019), *CLIMADA v1: a global weather and climate risk assessment platform*, GMD 12, 3085-3097. [DOI](https://doi.org/10.5194/gmd-12-3085-2019) | Global hazard/exposure datasets and application examples with varying spatial support | Hazard, exposure, impact and adaptation framework | Supports reproducible alternative hazard modeling. Use current version-specific API documentation for wind-model controls. Loss-function parameters require exposure and vulnerability interpretation. |
@@ -212,7 +269,7 @@ Optional station comparisons require documented 60-second winds at 10 m within 0
 
 In the radii comparison table, ORIGINAL counts USA_IFLAG O/V (original position and intensity); FILLED counts other source flags. V can still include filled radii or other fields, so these are row-provenance groups, not proof that a particular radius was measured independently. Zero, missing and nonpositive radii are excluded from the comparison rather than interpreted as observed zero extent.
 
-The benchmark uses Betsy 1956 (`1956222N13313`), Hugo 1989 (`1989254N13340`), Georges 1998 (`1998259N10335`) and Maria 2017 (`2017260N12310`). Review the scenarios together before selecting the historical configuration. The later indicator is distinct storms with local peak >=64 kt divided by 71 seasons, with 34 kt as a secondary measure and explicit incomplete-coverage handling. Hurricane ranks and the drought/hurricane sum follow that evaluation.
+The benchmark uses Betsy 1956 (`1956222N13313`), Hugo 1989 (`1989254N13340`), Georges 1998 (`1998259N10335`) and Maria 2017 (`2017260N12310`). Review the scenarios together before selecting the historical configuration. The retained comparison indicator is distinct storms with local peak >=64 kt divided by 71 seasons, with 34 kt as a secondary measure and explicit incomplete-coverage handling. The classification report now compares richer damage/recurrence and annual-exceedance candidates for an as-of-2026 planning snapshot. Hurricane ranks and the drought/hurricane sum follow that evaluation.
 
 The NHC Maria tropical cyclone report was examined for comparable station observations. Table 4, pages 17-18, includes Puerto Rico winds with varying heights and incomplete records. Its page 23 footnotes specify two-minute sustained winds for land reports unless noted and eight-minute buoy winds unless noted. The one-minute offshore examples are measured at 4-5 m. These values need an additional exposure/averaging method before direct one-minute, 10 m validation. The optional station comparison remains empty until qualifying records are supplied. [NHC Maria report](https://www.nhc.noaa.gov/data/tcr/AL152017_Maria.pdf).
 

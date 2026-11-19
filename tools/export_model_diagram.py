@@ -53,8 +53,11 @@ def _render_diagram(toolbox, model_name, *, title, subtitle, footer):
     right = max(x + w for x, y, w, h in bounds) + 20
     bottom = max(y + h for x, y, w, h in bounds) + 20
     horizontal_span = right - left
-    fig = plt.figure(figsize=(9.6, 12.3), facecolor='#f7fafc')
-    axis = fig.add_axes([.04, .085, .92, .79])
+    # Fit wide and tall saved layouts without large empty portrait margins.
+    graph_height = max(2.2, 9.6 * .92 * (bottom - top) / horizontal_span)
+    figure_height = graph_height + 2.1
+    fig = plt.figure(figsize=(9.6, figure_height), facecolor='#f7fafc')
+    axis = fig.add_axes([.04, .8 / figure_height, .92, graph_height / figure_height])
     axis.set_xlim(left, right)
     axis.set_ylim(bottom, top)
     axis.set_aspect('equal')
@@ -91,19 +94,19 @@ def _render_diagram(toolbox, model_name, *, title, subtitle, footer):
         axis.text(x + width/2, y + height/2, textwrap.fill(node_title, wrap_width),
                   ha='center', va='center', fontsize=9.3, linespacing=1.25,
                   fontfamily='DejaVu Sans', color='#17384c', zorder=3)
-    fig.text(.055, .958, title,
+    fig.text(.055, 1 - .33 / figure_height, title,
              fontsize=17, weight='bold', color='#17384c')
-    fig.text(.055, .933, subtitle or resources['title'],
+    fig.text(.055, 1 - .63 / figure_height, subtitle or resources['title'],
              fontsize=10, color='#466477')
     for x, label, color in ((.055, 'Inputs', '#e4eff8'), (.27, 'Script Tools', '#ffdf86'),
                             (.535, 'Typed outputs', '#e0f0e4')):
-        fig.text(x, .903, '  ' + label + '  ', fontsize=9.5, color='#17384c',
+        fig.text(x, 1 - .95 / figure_height, '  ' + label + '  ', fontsize=9.5, color='#17384c',
                  bbox={'boxstyle': 'round,pad=.35', 'fc': color, 'ec': '#52728b', 'lw': .6})
-    fig.text(.055, .052,
+    fig.text(.055, .42 / figure_height,
              'Saved ModelBuilder node positions and connections; connectors rerouted for readability.\n'
              'Colors denote roles. Public parameters and internal pipeline connectors are shown.',
              fontsize=8.5, color='#466477', linespacing=1.5)
-    fig.text(.055, .018, footer,
+    fig.text(.055, .12 / figure_height, footer,
              fontsize=8.2, color='#466477')
     return fig, {'model': resources['title'], 'nodes': len(nodes),
             'links': len(diagram.find('Links')),

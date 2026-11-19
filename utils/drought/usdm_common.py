@@ -28,6 +28,18 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
+def spatial_source_signature(manifest):
+    """Hash scientific GIS inputs, independent of mutable acquisition receipts.
+
+    Re-running a warm-cache fetch changes its manifest timestamp and paths,
+    not necessarily its maps. Byte hashes, dates and roles define this series.
+    """
+    cohort = manifest['plan_snapshot']
+    payload = dict(baseline_count=cohort['baseline_count'],year_count=cohort['year_count'],
+        maps=[(r['map_date'],r['role'],r['sha256']) for r in manifest['gis']])
+    return hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
+
+
 def write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,22 +87,41 @@ def typed_value(value, kind):
 
 
 @contextmanager
-def table_writer(path, schema):
+def table_writer(path, schema, create=True):
     """Stream normalized rows directly into the primary typed geodatabase table."""
     import arcpy
     path = Path(path)
     with arcpy.EnvManager(extent=None, mask=None, overwriteOutput=True):
         if not arcpy.Exists(str(path.parent)):
             arcpy.management.CreateFileGDB(str(path.parent.parent), path.parent.name)
-        if arcpy.Exists(str(path)):
-            arcpy.management.Delete(str(path))
-        arcpy.management.CreateTable(str(path.parent), path.name)
-        arcpy.management.AddFields(str(path), [[field, kind, '', length] for field, kind, length in schema])
+        if create:
+            if arcpy.Exists(str(path)):
+                arcpy.management.Delete(str(path))
+            arcpy.management.CreateTable(str(path.parent), path.name)
+            arcpy.management.AddFields(str(path), [[field, kind, '', length] for field, kind, length in schema])
         with arcpy.da.InsertCursor(str(path), [f[0] for f in schema]) as cursor:
             def write(rows):
                 for row in rows:
                     cursor.insertRow([typed_value(row.get(field), kind) for field, kind, _ in schema])
             yield write
+
+
+@contextmanager
+def file_gdb_edit(workspace):
+    """Commit related cursor writes together; create schemas before entering."""
+    import arcpy
+    editor = arcpy.da.Editor(str(workspace))
+    editor.startEditing(False, False)
+    editor.startOperation()
+    try:
+        yield
+    except BaseException:
+        editor.abortOperation()
+        editor.stopEditing(False)
+        raise
+    else:
+        editor.stopOperation()
+        editor.stopEditing(True)
 
 
 @contextmanager

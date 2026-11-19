@@ -130,3 +130,26 @@ DROUGHT_TOOLS = [
              parameter('Report', 'Validated Drought Data', 'DEFile', 'Final validation JSON and manifest reference; handoff to later processing. Failures raise a geoprocessing error.', output=True, extensions=['json']),
          ]),
 ]
+
+DROUGHT_TOOLS.extend([
+    dict(name='PrepareDroughtStates',label='Prepare Drought States',script='prepare_drought_states.py',
+        summary='Prepare the complete cached 2000-2025 weekly spatial series, preserving unknown coverage.',
+        validator=validator(2,{4:'drought_processing.gdb'}),params=[
+            parameter('ValidatedDroughtData','Validated Drought Data','DEFile','Passing acquisition download_validation.json.',extensions=['json']),
+            parameter('GridSpec','Grid Specification','DEFile','Shared EPSG:32161 250 m grid_spec.json.',extensions=['json']),
+            parameter('OutputFolder','Processing Folder','DEFolder','Folder for drought_processing.gdb and the weekly cube.'),
+            parameter('ReuseCompletedCache','Reuse Completed Cache','GPBoolean','Reuse only fingerprint/checksum-verified completed spatial products.',optional=True,default='true'),
+            parameter('ProcessingWorkspace','Processing Workspace','DEWorkspace','Prepared polygons, settings and weekly-state reference.',output=True)]),
+    dict(name='CalculateDroughtMetrics',label='Calculate Drought Metrics',script='calculate_drought_metrics.py',
+        summary='Calculate continuous occupancy, severity and both event rules; no classification.',
+        validator=validator(0,{1:'metric_catalog'}),params=[
+            parameter('ProcessingWorkspace','Processing Workspace','DEWorkspace','Workspace from Prepare Drought States.'),
+            parameter('MetricsCatalog','Metrics Catalog','DETable','Indicator paths and units; connect to Evaluate Drought Metrics.',output=True)]),
+    dict(name='EvaluateDroughtMetrics',label='Evaluate Drought Metrics',script='evaluate_drought_metrics.py',
+        summary='Validate indicators, coverage, annual counts and spatial/reference comparisons before classification review.',
+        validator=validator(0,{}),params=[
+            parameter('MetricsCatalog','Metrics Catalog','DETable','Catalog from Calculate Drought Metrics.'),
+            parameter('PrimaryIndicator','D1+ Weeks per Year','DERasterDataset','Average annual D1+ weekly observations; incomplete coverage is NoData.',output=True),
+            parameter('ValidWeekCount','Valid Week Count','DERasterDataset','Baseline valid assessments per study-land cell; not a hazard score.',output=True),
+            parameter('Report','Validated Drought Metrics','DEFile','Existing report with a separately scoped processing assessment.',output=True,extensions=['json'])]),
+])

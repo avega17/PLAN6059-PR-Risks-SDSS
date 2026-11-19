@@ -184,5 +184,69 @@ class WindEquations(unittest.TestCase):
         self.assertTrue(result['passed'])
 
 
+class DroughtProcessing(unittest.TestCase):
+    def test_occupancy_encoding_and_buffer_isolation(self):
+        import numpy as np
+        from utils.drought.usdm_metrics import occupancy
+        values = np.array([[0,255],[1,255],[2,2],[5,5],[5,5],[5,5],[5,5]],dtype=np.uint8)
+        stats = occupancy(values,4,1)
+        np.testing.assert_array_equal(stats['d1'],[2,2])
+        self.assertEqual(stats['wd1'][0],2)
+        self.assertTrue(np.isnan(stats['wd1'][1]))
+        self.assertEqual(stats['burden'][0],200)
+        with self.assertRaises(ValueError): occupancy(np.array([[9]],dtype=np.uint8),1,1)
+        from utils.drought.usdm_common import spatial_source_signature
+        m=dict(plan_snapshot=dict(baseline_count=1,year_count=1),created_utc='old',
+               gis=[dict(map_date='2000-01-04',role='BASELINE',sha256='a'*64,path='old')])
+        changed=copy.deepcopy(m);changed['created_utc']='new';changed['gis'][0]['path']='relocated'
+        self.assertEqual(spatial_source_signature(m),spatial_source_signature(changed))
+        changed['gis'][0]['sha256']='b'*64
+        self.assertNotEqual(spatial_source_signature(m),spatial_source_signature(changed))
+
+    def test_event_recovery_and_confirmation_dates(self):
+        import numpy as np
+        from utils.drought.usdm_metrics import analyze_events
+        x=np.array([0,0,0,2,2,1,0,3,1,0,0],dtype=np.uint8)
+        events,summary=analyze_events(x,8,3)
+        self.assertEqual(len(events),1)
+        self.assertEqual(events[0][2:10],(3,7,10,5,3,3,0,0))
+        self.assertEqual(summary['median'][0],5)
+        strict,s=analyze_events(x,8,1)
+        self.assertEqual((len(strict),s['maximum'][0]),(2,2))
+
+    def test_unknown_censoring_and_buffer_only_events(self):
+        import numpy as np
+        from utils.drought.usdm_metrics import analyze_events
+        x=np.array([0,0,0,2,255,2,0,0,0],dtype=np.uint8)
+        events,summary=analyze_events(x,9,3)
+        self.assertEqual(len(events),2)
+        self.assertEqual((events[0][8],events[0][9],events[1][8],events[1][9]),(0,1,1,0))
+        self.assertEqual(summary['complete'][0],0)
+        self.assertTrue(np.isnan(summary['maximum'][0]))
+        events,summary=analyze_events(np.array([0,0,0,2,2,2],dtype=np.uint8),3,3)
+        self.assertEqual(len(events),0)
+        self.assertEqual(summary['count'][0],0)
+
+    def test_safe_ring_screen_is_conservative(self):
+        import struct
+        import numpy as np
+        from utils.drought.usdm_archive import has_part_intersection
+        def shape(rings):
+            xy=np.array([point for ring in rings for point in ring],dtype='<f8')
+            starts=np.cumsum([0]+[len(r) for r in rings[:-1]]).astype('<i4')
+            low,high=xy.min(axis=0),xy.max(axis=0)
+            body=struct.pack('<i4dii',5,low[0],low[1],high[0],high[1],len(rings),len(xy))+starts.tobytes()+xy.tobytes()
+            header=bytearray(100);struct.pack_into('>i',header,0,9994)
+            return bytes(header)+struct.pack('>ii',1,len(body)//2)+body
+        conus=[(-120,30),(-100,30),(-100,40),(-120,40),(-120,30)]
+        pr=[(-67,18),(-66,18),(-66,19),(-67,19),(-67,18)]
+        envelope=(-68.15,17.8,-65.1,18.6)
+        self.assertFalse(has_part_intersection(shape([conus]),envelope))
+        self.assertTrue(has_part_intersection(shape([conus,pr]),envelope))
+        enclosing=[(-70,16),(-60,16),(-60,20),(-70,20),(-70,16)]
+        self.assertTrue(has_part_intersection(shape([enclosing]),envelope))
+        with self.assertRaises(ValueError): has_part_intersection(shape([pr])[:-3],envelope)
+
+
 if __name__ == '__main__':
     unittest.main()
