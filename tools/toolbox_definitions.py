@@ -73,27 +73,26 @@ HURRICANE_TOOLS = [
 
 HURRICANE_TOOLS.extend([
     dict(name='PrepareWindInputs', label='Prepare Wind Inputs', script='prepare_wind_inputs.py',
-         summary='Validate preparation/grid and prepare full USA tracks for four HURRECON benchmark storms.',
+         summary='Validate the shared grid and prepare the full 1955–2025 storm catalog.',
          validator=validator(2, {4: 'hurricane_winds.gdb'}), params=[
              parameter('ValidatedHurricaneData', 'Validated Hurricane Data', 'DEFile', 'validation_report.json from Validate Prototype.', extensions=['json']),
              parameter('GridSpec', 'Grid Specification', 'DEFile', 'Validated shared grid_spec.json.', extensions=['json']),
              parameter('OutputFolder', 'Wind Output Folder', 'DEFolder', 'Folder for hurricane_winds.gdb.'),
-             parameter('BenchmarkStorms', 'Benchmark Storms', 'GPString', 'Semicolon-separated SIDs for Betsy, Hugo, Georges and Maria.', optional=True,
-                       default='1956222N13313;1989254N13340;1998259N10335;2017260N12310'),
+             parameter('BenchmarkStorms', 'Legacy Storm List', 'GPString', 'Kept for compatibility with earlier models. Processing always uses all prepared storms.', optional=True),
              parameter('WindWorkspace', 'Wind Workspace', 'DEWorkspace', 'Prepared wind tracks, cells, settings and size table.', output=True)]),
     dict(name='EstimateWindFields', label='Estimate Wind Fields', script='estimate_wind_fields.py',
-         summary='Benchmark four size scenarios at 15, 5 and 2.5 minutes; retain every 5-minute event peak.',
+         summary='Reconstruct local winds, count threshold exceedances and summarize the full record and rolling windows.',
          validator=validator(0, {2: 'wind_event_catalog'}), params=[
              parameter('WindWorkspace', 'Wind Workspace', 'DEWorkspace', 'Geodatabase returned by Prepare Wind Inputs.'),
-             parameter('SizeScenarios', 'Size Scenarios', 'DETable', 'Optional table with RMW_KM and PROFILE_B. Blank uses the four published pairs.', optional=True),
-             parameter('WindCatalog', 'Wind Field Catalog', 'DETable', 'Storm/scenario catalog with relative raster names.', output=True)]),
+             parameter('SizeScenarios', 'Size Scenarios', 'DETable', 'Leave blank to evaluate the four published profiles.', optional=True),
+             parameter('WindCatalog', 'Wind Field Catalog', 'DETable', 'Event ledger accounting for every prepared storm.', output=True)]),
     dict(name='EvaluateWindEstimates', label='Evaluate Wind Estimates', script='evaluate_wind_estimates.py',
-         summary='Check retained fields, temporal convergence, quadrant radii and optional comparable station winds.',
+         summary='Check study coverage, raster alignment and sensitivity to storm size and time step.',
          validator=validator(0, {}), params=[
              parameter('WindCatalog', 'Wind Field Catalog', 'DETable', 'Catalog returned by Estimate Wind Fields.'),
              parameter('ReferenceObservations', 'Reference Wind Observations', 'DETable', 'Optional 60-second, 10-m station maxima with documented exposure/window/source; see setup guide.', optional=True),
-             parameter('Summary', 'Wind Benchmark Summary', 'DETable', 'Geodatabase evaluation results.', output=True),
-             parameter('Report', 'Validated Wind Benchmark', 'DEFile', 'Existing validation report with wind_benchmark status and evidence.', output=True, extensions=['json'])]),
+             parameter('Summary', 'Wind Evaluation Summary', 'DETable', 'Geodatabase time-step comparison.', output=True),
+             parameter('Report', 'Validated Wind History', 'DEFile', 'Validation report consumed by Classify Hurricane Winds.', output=True, extensions=['json'])]),
 ])
 
 DROUGHT_TOOLS = [
@@ -141,7 +140,7 @@ DROUGHT_TOOLS.extend([
             parameter('ReuseCompletedCache','Reuse Completed Cache','GPBoolean','Reuse only fingerprint/checksum-verified completed spatial products.',optional=True,default='true'),
             parameter('ProcessingWorkspace','Processing Workspace','DEWorkspace','Prepared polygons, settings and weekly-state reference.',output=True)]),
     dict(name='CalculateDroughtMetrics',label='Calculate Drought Metrics',script='calculate_drought_metrics.py',
-        summary='Calculate continuous occupancy, severity and both event rules; no classification.',
+        summary='Calculate D1+ and D2+ weeks, event frequencies and durations using both recovery rules.',
         validator=validator(0,{1:'metric_catalog'}),params=[
             parameter('ProcessingWorkspace','Processing Workspace','DEWorkspace','Workspace from Prepare Drought States.'),
             parameter('MetricsCatalog','Metrics Catalog','DETable','Indicator paths and units; connect to Evaluate Drought Metrics.',output=True)]),
@@ -153,3 +152,22 @@ DROUGHT_TOOLS.extend([
             parameter('ValidWeekCount','Valid Week Count','DERasterDataset','Baseline valid assessments per study-land cell; not a hazard score.',output=True),
             parameter('Report','Validated Drought Metrics','DEFile','Existing report with a separately scoped processing assessment.',output=True,extensions=['json'])]),
 ])
+
+
+def classification_tool(name, label, script, filename, handoff):
+    return dict(name=name, label=label, script=script,
+        summary='Write the continuous hazard score and integer course classes on the shared 250 m grid.',
+        validator=validator(2,{3:f'{filename}_score250.tif',4:f'{filename}_rank250.tif'}),
+        params=[
+            parameter('ValidatedData',handoff,'DEFile','Passing report from the processing model.',extensions=['json']),
+            parameter('GridSpec','Grid Specification','DEFile','The validated grid_spec.json shared by both hazards.',extensions=['json']),
+            parameter('OutputFolder','Output Folder','DEFolder','Existing folder for the two final GeoTIFFs.'),
+            parameter('Score','Hazard Score','DERasterDataset','Continuous historical hazard indicator.',output=True),
+            parameter('Rank','Hazard Class','DERasterDataset','Low = 1, Medium = 3, High = 5, with NoData for unknown cells.',output=True),
+        ])
+
+
+HURRICANE_TOOLS.append(classification_tool('ClassifyHurricaneWinds', 'Classify Hurricane Winds',
+    'classify_hurricane_winds.py', 'RiskHurricaneWinds', 'Validated Wind History'))
+DROUGHT_TOOLS.append(classification_tool('ClassifyDroughtHazard', 'Classify Drought Hazard',
+    'classify_drought_hazard.py', 'RiskDrought', 'Validated Drought Metrics'))

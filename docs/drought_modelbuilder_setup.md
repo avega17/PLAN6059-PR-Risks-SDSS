@@ -71,6 +71,24 @@ After both drought models are saved, refresh the one drought PNG with:
 python tools/export_model_diagram.py --toolbox DroughtRisk_Model_Toolbox.atbx --output figures/drought_modelbuilder_graph --all-models --title "Drought workflows" --footer "Continuous indicators; final classification remains pending"
 ```
 
+## Make the score and class rasters
+
+Run **Classify Drought Hazard** after **Drought_Process_USDM** succeeds. Fill in **Validated Drought Metrics** with `output/drought/reports/download_validation.json`, **Grid Specification** with `output/shared/grid/grid_spec.json`, and **Output Folder** with `output/drought/data`. The outputs are `RiskDrought_score250.tif` (average D1+ weeks per year) and `RiskDrought_rank250.tif` (1/3/5). The D2+ comparison stays in the processing geodatabase.
+
+To build the canvas, right-click **DroughtRisk_Model_Toolbox.atbx** in **Catalog**, choose **New → Model**, and drag in **Classify Drought Hazard**. Enter the three values above. Right-click each of the three input ovals and two output ovals and click **Parameter** so a **P** appears. In **ModelBuilder → Properties**, set Name to `ClassifyDrought` and Label to `Drought_Classify`. Order the three inputs first, then **Hazard Score** and **Hazard Class**. Click **Save** on the ModelBuilder ribbon. You can run `drought.py classify` from ArcGIS Pro Python using the same default paths.
+
+```mermaid
+flowchart TD
+    A["Weekly USDM categories, 2000–2025"] --> B["Prepare Drought States"]
+    B --> C["Calculate Drought Metrics"]
+    C --> D["Evaluate Drought Metrics"]
+    D --> E["Classify Drought Hazard"]
+    E --> F["D1+ weeks per year and Low / Medium / High"]
+    E --> G["D2+ comparison"]
+```
+
+The D1+ class TIFF and the D2+ class raster each use three classes fitted to their own counts. For absolute comparisons, display D1+ and D2+ scores using the same weeks/year legend. [Compare three-class maps in ArcGIS Pro](hurricane_modelbuilder_setup.md#compare-three-class-maps-in-arcgis-pro).
+
 ## Existing acquisition model
 
 Open `DroughtRisk_Model_Toolbox.atbx`; alias `droughtprobe`. Retain the saved model's internal name **Model** and label **Drought_Fetch_USDM**. Its three stages are Plan Drought Download → Fetch Drought Data → Validate Drought Download.
@@ -294,7 +312,7 @@ flowchart TD
     n2["PY: Check eligibility, exterior NoData and duration-summary consistency"]
     n3["API: Verify current island allocation and Culebra/no-drought controls"]
     n4["GP: CreateFishnet; API: assign cell IDs from geometry"]
-    n5["GP: PairwiseIntersect benchmark categories and land cells"]
+    n5["GP: Pairwise Intersect drought polygons and land cells"]
     n6["PY: Compare cell-center with dominant land area including None; compare state reference areas"]
     n7["GP and API: Publish comparison tables; update processing assessment and return three outputs"]
     n0 --> n1

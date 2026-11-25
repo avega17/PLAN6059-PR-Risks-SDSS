@@ -46,6 +46,11 @@ def run_acquisition(start_date, end_date, output_folder, local_archive_folder=No
             'report':report['report'],'passed':report['passed']}
 
 
+def classify_drought(*args, **kwargs):
+    from utils.shared.hazard_rank import classify_drought as classify
+    return classify(*args, **kwargs)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command',required=True)
@@ -84,6 +89,10 @@ def build_parser():
     metrics.add_argument('--processing-workspace',default='output/drought/data/drought_processing.gdb')
     evaluate = sub.add_parser('evaluate')
     evaluate.add_argument('--metrics-catalog',default='output/drought/data/drought_processing.gdb/metric_catalog')
+    classify = sub.add_parser('classify')
+    classify.add_argument('--validated-data', default='output/drought/reports/download_validation.json')
+    classify.add_argument('--grid-spec', default='output/shared/grid/grid_spec.json')
+    classify.add_argument('--output-folder', default='output/drought/data')
     return parser
 
 
@@ -93,7 +102,7 @@ def main(argv=None):
     functions = {'plan':plan_drought_download,'fetch':fetch_drought_data,
                  'validate':validate_drought_download,'run':run_acquisition,
                  'prepare-states':prepare_drought_states,'metrics':calculate_drought_metrics,
-                 'evaluate':evaluate_drought_metrics,'process':process_drought}
+                 'evaluate':evaluate_drought_metrics,'process':process_drought,'classify':classify_drought}
     if command=='fetch':
         options['progress'] = lambda value:print(value,file=sys.stderr,flush=True)
     try:

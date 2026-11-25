@@ -1,79 +1,51 @@
 # Hurricane Winds ModelBuilder setup
 
-## Wind-field benchmark model
+## Process the historical storm catalog
 
-Open `HurricaneWinds_Model_Toolbox.atbx` in the Catalog pane. It contains two saved models: **HurricaneWinds_Fetch_IBTrACS** (internal name `Model`) and **HurricaneWinds_Estimate_Winds** (`EstimateWinds`). Keep both items and the toolbox alias `prrisks`.
+Open **HurricaneWinds_Estimate_Winds** in **HurricaneWinds_Model_Toolbox.atbx**. Fill in the paths below and click **Run**. The tool processes every prepared storm from 1955 through 2025.
 
-To run the wind benchmark, double-click **HurricaneWinds_Estimate_Winds**, fill in its three inputs using the paths below, then click Run once. Its three outputs are filled automatically. It processes Betsy, Hugo, Georges and Maria; historical aggregation and classification follow a separate review.
+| Box in ArcGIS Pro | Value |
+| --- | --- |
+| Validated Hurricane Data | `output/hurricane/reports/validation_report.json` |
+| Grid Specification | `output/shared/grid/grid_spec.json` |
+| Wind Output Folder | `output/hurricane/data` |
 
-To inspect or change the canvas, right-click the model in Catalog and choose **Edit**. The instructions below explain the saved setup; you do not need to recreate it.
+Leave **Size Scenarios** and **Reference Wind Observations** blank for the class run. The three stages pass **Wind Workspace** and **Wind Field Catalog** between tools. For classification, use the updated `validation_report.json` from **Evaluate Wind Estimates**, regardless of the label on the saved model form.
 
-If rebuilding the canvas, add **Prepare Wind Inputs**, **Estimate Wind Fields** and **Evaluate Wind Estimates**. Double-click each yellow box to configure its own tool dialog, then click OK. Optional settings remain inside these boxes by default; they are not extra fields on the saved model form.
+## Make the score and class rasters
 
-| Prepare Wind Inputs parameter | Exact value |
-|---|---|
-| Validated Hurricane Data | `C:\Users\ALEJANDROSVEGANOGALE\Documents\Repos\PLAN6059-PR-Risks-SDSS\output\hurricane\reports\validation_report.json` |
-| Grid Specification | `C:\Users\ALEJANDROSVEGANOGALE\Documents\Repos\PLAN6059-PR-Risks-SDSS\output\shared\grid\grid_spec.json` |
-| Wind Output Folder | `C:\Users\ALEJANDROSVEGANOGALE\Documents\Repos\PLAN6059-PR-Risks-SDSS\output\hurricane\data` |
-| Benchmark Storms | `1956222N13313;1989254N13340;1998259N10335;2017260N12310` |
+Run **Classify Hurricane Winds** with the updated **Validated Wind History**, the same **Grid Specification**, and `output/hurricane/data` as **Output Folder**. Spatial Analyst provides **Reclassify**. The tool writes `RiskHurricaneWinds_score250.tif` and `RiskHurricaneWinds_rank250.tif`. The file geodatabase holds the five-year variants and their fitted count breaks in the window table. Three early windows with only zero and one storm retain count and rate maps.
 
-| Estimate Wind Fields parameter | Value |
-|---|---|
-| Wind Workspace | Connect the **Wind Workspace model variable** produced by Prepare Wind Inputs |
-| Size Scenarios | Blank for the four published pairs, or an input table containing numeric `RMW_KM` and `PROFILE_B` columns |
+To build the corresponding canvas, right-click the hurricane toolbox in **Catalog**, choose **New → Model**, and drag in **Classify Hurricane Winds**. Double-click the box and enter the three values above. Right-click each of its three input ovals and the two output ovals and click **Parameter**. A **P** on the oval means the item appears on the form when someone opens the saved model. Use **ModelBuilder → Properties** to set Name to `ClassifyWind` and Label to `HurricaneWinds_Classify`. In **Parameters**, put the three inputs first, then **Hazard Score** and **Hazard Class**. Save from the **ModelBuilder** ribbon.
 
-| Evaluate Wind Estimates parameter | Value |
-|---|---|
-| Wind Field Catalog | Connect the **Wind Field Catalog model variable** produced by Estimate Wind Fields |
-| Reference Wind Observations | Blank unless a qualifying station-observation table is supplied |
+For the same calculation from ArcGIS Pro Python, run `hurricane_winds.py wind-history` followed by `hurricane_winds.py classify` from the repository root. Consult the [classification report](hurricane_classification_report.md) for the score, boundaries and interpretation.
 
-Use output-to-input connections for both arrows. Selecting a table/geodatabase directly from disk in place of those model variables would omit the process dependency. Keep all outputs Derived. The workflow writes internal tables and rasters inside the returned workspace; the catalog gives the storm/scenario associations.
+## Combine the two course class rasters
 
-### Make the saved model's input/output form (no run needed)
+In ModelBuilder, add **Raster Calculator** from **Spatial Analyst Tools → Map Algebra**. Drag in the two completed rank TIFFs listed below. Double-click Raster Calculator and insert both variables by name from the list above the expression box.
 
-A **model parameter** is an oval marked with **P** on the canvas. It becomes a field when someone double-clicks the whole saved model. This is separate from the settings inside a yellow Script Tool box. Marking parameters does not calculate data.
+| Box in ArcGIS Pro | Value |
+| --- | --- |
+| Wind class input | `output/hurricane/data/RiskHurricaneWinds_rank250.tif` |
+| Drought class input | `output/drought/data/RiskDrought_rank250.tif` |
+| Expression | `"RiskHurricaneWinds_rank250" + "RiskDrought_rank250"` |
+| Output raster | `output/shared/grid/Combined_sum250.tif` |
 
-1. Find the three ovals that feed **into Prepare Wind Inputs**. Rename them **Validated Hurricane Data**, **Grid Specification** and **Wind Output Folder**. The folder path ends in `data`.
-2. Right-click each of those three ovals and click **Parameter** so a P appears. Do not mark the yellow boxes.
-3. Find **Wind Workspace**, which comes **out of Prepare** and goes **into Estimate**. Its path ends in `hurricane_winds.gdb`. Leave Parameter unchecked on this internal connector.
-4. Right-click **Wind Field Catalog**, **Wind Benchmark Summary** and **Validated Wind Benchmark** and check Parameter on each. The catalog is both a public output and the connector feeding Evaluate; preserve its arrow.
-5. Open **ModelBuilder ? Properties ? Parameters**. Put the three inputs first, then the three outputs, in the order below. Check types and directions as well as names.
-6. Click OK, then click **Save on the ModelBuilder ribbon**. Saving only the project is not sufficient. Running is unnecessary while configuring this form.
+If your canvas adds a filename extension to the variable name, insert the variable from the list so the expression matches the canvas. Set **Snap Raster** and **Extent** to `output/shared/grid/reference250.tif`, **Cell Size** to 250 m, and the output coordinate system to EPSG:32161. Right-click both input ovals and the combined raster oval and click **Parameter**. The sum keeps **2, 4, 6, 8 and 10** where those combinations occur. Areas with unknown data in either hazard remain NoData. Use `hurricane_winds.py combine` from ArcGIS Pro Python to reproduce and check the arithmetic.
 
-| Order | Model field | Direction / type |
-|---|---|---|
-| 1 | Validated Hurricane Data | Input / File |
-| 2 | Grid Specification | Input / File |
-| 3 | Wind Output Folder | Input / Folder |
-| 4 | Wind Field Catalog | Output / Table |
-| 5 | Wind Benchmark Summary | Output / Table |
-| 6 | Validated Wind Benchmark | Output / File |
+Use **Unique Values** for the combined map. The saved layout uses a palette with five distinct hues and decreasing brightness as the score increases.
 
-Keep **Benchmark Storms**, **Size Scenarios** and **Reference Wind Observations** inside their individual tool dialogs unless deliberately changing the public interface. To reveal an optional setting on the canvas for inspection, right-click its yellow box ? **Make Variable ? From Parameter** ? choose the setting. This creates an oval; checking **Parameter** on that oval is a separate action. The current saved form has six rows, not nine.
+| Total | Color |
+| ---: | --- |
+| 2 | Yellow `#F5DA6D` |
+| 4 | Green `#7CC376` |
+| 6 | Blue `#2F99B4` |
+| 8 | Violet `#6352A7` |
+| 10 | Dark burgundy `#681C38` |
 
-The default scenario table has rows `(20,1.5)`, `(40,1.4)`, `(60,1.3)` and `(80,1.2)`. It is created inside the wind geodatabase. For a custom input, use a separate table so preparation does not replace the supplied scenario values.
+## Compare three-class maps in ArcGIS Pro
 
-The optional station input requires `SID`, `STATION`, `LAT`, `LON`, `WIND_MPS`, `AVG_SECONDS`, `HEIGHT_M`, `COVER`, `START_UTC`, `END_UTC`, `SOURCE`, `LOWER_BOUND`. Use 60-second sustained winds, height 10 m within 0.5 m, COVER `LAND` or `WATER`, complete UTC observation windows, an explicit source, and LOWER_BOUND=0. Invalid/mismatched rows fail with a corrective message. Gusts and incomplete instrument records require a separate evaluation method.
-
-Results use `output/hurricane/data/hurricane_winds.gdb`: 16 default five-minute peak rasters, event catalog, size table, native tracks, geographic cell centers, convergence, timing, reference comparisons and footprint summary tables. Fifteen- and 2.5-minute calculations are compared in memory. The existing `output/hurricane/reports/validation_report.json` receives a `wind_benchmark` section. Read its status, convergence and reference-availability fields when using benchmark results.
-
-Run the three stages from ArcGIS Pro Python through the same root entrypoint:
-
-```powershell
-& 'C:/Program Files/ArcGIS/Pro/bin/Python/envs/arcgispro-py3/python.exe' hurricane_winds.py wind-benchmark
-```
-
-For individual stages use `wind-prepare`, `wind-estimate` and `wind-evaluate`. Run `--help` for optional parameters. A successful computational benchmark provides size/convergence evidence for review. Select the historical configuration together before extending to 1955-2025 indicators and 1/3/5 ranking.
-
-After saving the graph, run it from the Geoprocessing pane and check that the catalog, rasters, tables and report survive completion. Test a relocated distribution with local source/output paths. Close ModelBuilder tabs and save the project on its map before updating toolbox files.
-
-After both hurricane models are saved, refresh the existing hurricane PNG with both native graphs:
-
-```powershell
-& 'C:/Program Files/ArcGIS/Pro/bin/Python/envs/arcgispro-py3/python.exe' tools/export_model_diagram.py --all-models --subtitle 'Preparation and wind benchmark' --footer 'Historical aggregation and hazard ranking await benchmark review'
-```
-
-This reads saved diagrams and stacks them into the one hurricane PNG. It does not create or connect ModelBuilder graphs.
+Add the continuous **score** TIFF to a map. Right-click that layer in **Contents** and choose **Symbology**. Choose **Classify**, set **Classes** to **3**, and try **Quantile**, **Natural Breaks (Jenks)** and **Equal Interval**. Use **Manual Interval** with the same rate legend when comparing how many storms per year different windows recorded. The production rank rasters show relative standing and use the Natural Breaks fitted to each window. Identical event counts stay together, so the quantile method may yield fewer than three distinct groups. The **class** TIFF contains the approved integer values. Display it with **Unique Values** for the course map. [Esri raster symbology](https://doc.esri.com/en/arcgis-pro/latest/help/data/imagery/symbology-pane.html)
 
 ## Existing preparation model
 
@@ -236,15 +208,18 @@ flowchart TD
 
 </details>
 
+
 ### Hurricane wind-processing overview
+
 ```mermaid
 flowchart TD
-    inputs["Validated Hurricane Data, Grid Specification and Wind Output Folder"] --> prep["Prepare Wind Inputs"]
-    prep --> workspace["Wind Workspace - internal"]
-    workspace --> calc["Estimate Wind Fields"]
-    calc --> catalog["Wind Field Catalog - public and connected"]
-    catalog --> evaluate["Evaluate Wind Estimates"]
-    evaluate --> result["Wind Benchmark Summary and Validated Wind Benchmark"]
+    A["1955–2025 storm tracks and shared grid"] --> B["Prepare Wind Inputs"]
+    B --> C["Estimate Wind Fields"]
+    C --> D["Count storms that reach hurricane-force winds"]
+    D --> E["Evaluate Wind Estimates"]
+    E --> F["Classify Hurricane Winds"]
+    F --> G["2026 wind frequency and Low / Medium / High"]
+    F --> H["Five-year map series in the geodatabase"]
 ```
 
 <details>
@@ -252,27 +227,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    n0["PY: Revalidate preparation and grid; check benchmark storm selection"]
-    n1["GP: CreateFileGDB when needed"]
-    n2["API: Read complete selected USA tracks, including lifecycle context"]
-    n3["PY: Check eligible intervals, wind availability and chronology"]
-    n4["API: RasterToNumPyArray identifies grid cell centers"]
-    n5["API: NumPyArrayToFeatureClass; GP: Project centers to WGS84"]
-    n6["GP and API: CreateTable, AddFields and InsertCursor store tracks, cells, sizes and settings"]
-    n7["PY: Record input/software identity and return Wind Workspace"]
-    n0 --> n1
-    n1 --> n2
-    n2 --> n3
-    n3 --> n4
-    n4 --> n5
-    n5 --> n6
-    n6 --> n7
+    A["Check prepared tracks and shared grid"] --> B["Read the complete USA positions and winds"]
+    B --> C["Find grid cell centers and project them to WGS84"]
+    C --> D["Write the track and grid-center tables"]
 ```
 
-| Implementation | What happens |
-|---|---|
-| Actual ArcGIS tools | CreateFileGDB, Project, CreateTable, AddFields and Delete. NumPyArrayToFeatureClass and cursors are APIs. |
-| GUI comparison | Selection and Project have GUI analogues. USA-position motion/coverage validation remains custom; no wind field is generated in this stage. |
+ArcPy uses **Project**, **Create File Geodatabase**, **Create Table** and **Add Fields**. Array and cursor operations read the grid and write the tables.
 
 </details>
 
@@ -281,28 +241,14 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    n0["PY and API: Verify workspace, tracks, grid and unique size scenarios"]
-    n1["PY: For each storm, interpolate native intervals at 15, 5 and 2.5 minute maximum steps"]
-    n2["PY: Compute great-circle range, bearing and USA-position storm motion"]
-    n3["PY: Evaluate HURRECON sustained winds for each radius/profile pair"]
-    n4["PY: Retain cell maxima; safe bounds skip samples that cannot raise them"]
-    n5["PY: Compare sampling steps and threshold-footprint disagreement"]
-    n6["API: NumPyArrayToRaster retains 5-minute peak fields; GP: DefineProjection"]
-    n7["GP and API: Write catalog, timing and convergence tables; remove obsolete owned rasters"]
-    n0 --> n1
-    n1 --> n2
-    n2 --> n3
-    n3 --> n4
-    n4 --> n5
-    n5 --> n6
-    n6 --> n7
-    n7 -. "next storm until complete" .-> n1
+    A["Read tracks and the common storm profiles"] --> B["Check whether each storm can reach the study area"]
+    B --> C["Interpolate supported track intervals and derive motion"]
+    C --> D["Calculate local peak sustained wind with HURRECON"]
+    D --> E["Count distinct storms above each threshold"]
+    E --> F["Summarize complete history and 30-year windows"]
 ```
 
-| Implementation | What happens |
-|---|---|
-| Actual ArcGIS tools | DefineProjection, CreateTable, AddFields and Delete; raster/array conversion and cursors are APIs. |
-| GUI comparison | There is no one-to-one built-in interpolation tool for HURRECON. Raster Calculator could express pieces of the equations; it does not reproduce track interpolation, bounds and streaming maxima. |
+NumPy calculates storm motion, wind bounds and HURRECON winds, then counts each storm once per cell and window. ArcPy writes the resulting count rasters with **NumPyArrayToRaster** and **Define Projection**.
 
 </details>
 
@@ -311,24 +257,11 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    n0["PY and API: Verify catalog identity, retained rasters, alignment and valid coverage"]
-    n1["PY: Read convergence results and keep pass/fail status visible"]
-    n2["PY: Compare positive recorded quadrant radii with modeled water-exposure radii"]
-    n3["PY: If station table supplied, verify averaging period, height, exposure and UTC windows"]
-    n4["PY: Compute comparable station-window peaks, or record zero comparisons"]
-    n5["GP and API: Publish footprint summary, radii and station tables"]
-    n6["PY: Update wind_benchmark assessment and return summary plus report"]
-    n0 --> n1
-    n1 --> n2
-    n2 --> n3
-    n3 --> n4
-    n4 --> n5
-    n5 --> n6
+    A["Read the storm ledger and historical count rasters"] --> B["Check storm coverage, grid and NoData"]
+    B --> C["Check that wind results are stable at a finer time step"]
+    C --> D["Update the validation file for classification"]
 ```
 
-| Implementation | What happens |
-|---|---|
-| Actual ArcGIS tools | CreateTable, AddFields and Delete via table helpers. RasterToNumPyArray and SearchCursor read results. |
-| GUI comparison | Raster properties and attribute summaries are inspectable in Pro. Numerical convergence, modeled radii and station comparability are custom. Bad data fail; failed convergence or absent station evidence produce warnings, not an automatic claim of scientific validation. |
+ArcPy reads the ledger and rasters. Python checks the full record and reports unresolved observations before classification.
 
 </details>

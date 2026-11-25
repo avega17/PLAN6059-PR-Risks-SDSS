@@ -1,10 +1,6 @@
 # Hurricane Winds processing plan
 
-The hurricane toolbox contains the saved preparation and wind-benchmark models. The benchmark produces 16 peak-wind rasters for four storms and four size scenarios. All proposed five-to-2.5-minute convergence checks pass on those cases. The [setup guide](hurricane_modelbuilder_setup.md) shows how to open and run both models.
-
-This establishes a working computational benchmark. Comparable station validation, a paired CLIMADA comparison, historical coverage accounting and selection of the historical size configuration remain open. Full-period event rates and 1/3/5 classification follow those evaluation decisions.
-
-The [classification report](hurricane_classification_report.md) separates essential historical-production decisions from optional evaluation improvements, compares ranking candidates and outlines the remaining course deliverables. No historical configuration or rank crosswalk has been adopted.
+The preparation model audits local IBTrACS records and establishes the shared grid. The processing model accounts for the entire 1955–2025 storm catalog and sends its validated history to the classification tool. See the [setup guide](hurricane_modelbuilder_setup.md) and [classification report](hurricane_classification_report.md).
 
 ## Discussing the saved hurricane preparation model
 
@@ -36,34 +32,48 @@ flowchart TD
 - **What is measured at a track point?** `USA_WIND` is a storm-wide maximum one-minute sustained wind in knots. It takes the later HURRECON step to estimate local winds at study cells. Preparation carries interpolation flags and preserves the **85 missing wind values** for coverage review.
 - **What can you open during the discussion?** Show Prepared Observations in `hurricane_prepare.gdb`, then open `grid_spec.json` to show the projection and cell geometry. The five public outputs are Prepared Observations, Reference Raster, Study Mask, Grid Specification and Validated Hurricane Data (`validation_report.json`). The original-point copy, storm summary, quality-control table and projected boundary are accessible through the workspace and manifests. The 250 m grid defines output alignment. Local wind estimates have coarser information support.
 
-## Discussing the saved wind processing model
-
-**HurricaneWinds_Estimate_Winds** takes the validated track handoff, the shared grid specification and an output folder. It benchmarks Betsy, Hugo, Georges and Maria at four storm sizes. The Wind Field Catalog is both a public output and the connected input to the evaluation tool. See the [wind setup guide](hurricane_modelbuilder_setup.md#hurricane-wind-processing-overview) for the tool algorithms and parameter values.
+## Wind processing
 
 ```mermaid
 flowchart TD
-    Inputs["Validated Hurricane Data + Grid Specification<br/>Wind Output Folder"] --> Prepare["Prepare Wind Inputs"]
-    Prepare --> Workspace["Wind Workspace · internal<br/>Storm tracks, grid centers and size scenarios"]
-    Workspace --> Estimate["Estimate Wind Fields"]
-    Estimate --> Peaks["Geodatabase peak wind rasters<br/>16 in the default benchmark"]
-    Estimate --> Catalog["Wind Field Catalog · public output<br/>Links each storm and size scenario to its raster"]
-    Catalog --> Evaluate["Evaluate Wind Estimates"]
-    Evaluate --> Outputs["Wind Benchmark Summary<br/>Validated Wind Benchmark"]
+    A["1955–2025 storm tracks and shared grid"] --> B["Prepare Wind Inputs"]
+    B --> C["Estimate Wind Fields"]
+    C --> D["Count storms that reach hurricane-force winds"]
+    D --> E["Evaluate Wind Estimates"]
+    E --> F["Classify Hurricane Winds"]
+    F --> G["2026 wind frequency and Low / Medium / High"]
+    F --> H["Five-year map series in the geodatabase"]
 ```
 
 [Download the wind processing diagram as a PNG](../figures/discussion/hurricane_wind_processing.png).
 
-| Stage | What to point out in the discussion |
-| --- | --- |
-| **Prepare Wind Inputs** | Checks the prepared tracks and grid, selects the four benchmark storms, and uses **Project** to express study-cell centers in WGS84 for the wind calculations. The internal Wind Workspace holds the full tracks, cell locations and size scenarios. |
-| **Estimate Wind Fields** | Interpolates supported track intervals and uses the HURRECON equations to calculate sustained wind at each cell center. It retains one peak per storm, size scenario and cell. The tool compares maximum sampling steps of **15, 5 and 2.5 minutes** and writes the **5-minute runs' peak rasters**. Those steps are evaluation intervals for the modeled one-minute sustained wind. |
-| **Evaluate Wind Estimates** | Reads the catalog and verifies the rasters, grid and coverage. It checks time-step convergence and compares modeled threshold radii with available IBTrACS quadrant radii. A compatible station table can add comparisons with observed winds. The tool returns a summary table and updates the validation JSON. |
+**Prepare Wind Inputs** reads the full USA tracks and projects the cell centers to WGS84. **Estimate Wind Fields** bounds possible winds from every storm, reconstructs local sustained winds where needed and counts exposures without publishing separate storm rasters. **Evaluate Wind Estimates** checks the event ledger, grid, coverage and time-step sensitivity. The 250 m grid aligns the outputs, while the track data and model assumptions determine their effective information support.
 
-The default run writes **16 modeled storm/scenario peak rasters** in `hurricane_winds.gdb`. The benchmark helps assess model settings before historical frequency analysis. The 250 m cells locate the model estimates on the shared grid, while the track observations and model assumptions govern the information they carry.
+## Wind calculations and geodatabase layers
+
+1. **Prepare locations and tracks.** Read the 1955–2025 USA positions and sustained winds from IBTrACS. Project reference-grid cell centers to longitude and latitude. Keep tropical and subtropical intervals with both endpoints observed and at most six hours apart. Interpolate supported positions and intensities at steps of at most five minutes. Calculate storm motion from the native positions. Use conservative wind bounds for distant or weak samples. Record unresolved exposure as unknown.
+2. **Estimate one peak per storm and cell.** For each supported sample, use great-circle distance and bearing from the storm center. HURRECON adjusts the wind for the direction and speed of storm motion and applies a radial wind profile and a land factor. The chosen profile uses a 20 km radius of maximum wind, shape parameter B = 1.5 and land factor 0.8. Keep the highest local 10 m one-minute sustained wind for the storm within the window. The five-minute step sets the evaluation interval.
+3. **Count and classify.** Count a storm once at a cell if any modeled peak in the window reaches 64 kt. For example, one qualifying storm in 71 years gives a score of 1/71 storms/year. Fit two Natural Breaks (Jenks) cuts to each window's integer counts across valid cell centers. Equal counts share one class. Apply the 1/3/5 code with **Reclassify** and check all three values and the shared NoData mask. Keep the exact count breaks, source years, raster names and class areas in `wind_reference_windows`.
+
+| Layer or table in `hurricane_winds.gdb` | Definition and units |
+| --- | --- |
+| `N64_all_YYYY` | Number of distinct storms whose local peak reached ≥64 kt from 1955 through YYYY−1. The 2026 course raster starts with `N64_all_2026`. |
+| `N64_rolling_YYYY` | Same count for the 30 complete calendar years YYYY−30 through YYYY−1. For 2026, this is 1996–2025. |
+| `H64_score_all_YYYY`, `H64_score_rolling_YYYY` | Corresponding `N64` count divided by years in the window, in storms/year. The default full-history score is `RiskHurricaneWinds_score250.tif`. |
+| `H64_rank_all_YYYY`, `H64_rank_rolling_YYYY` | Integer 1/3/5 classes fitted to that window. The default full-history class is `RiskHurricaneWinds_rank250.tif`. Windows with fewer than three distinct counts retain count and rate maps. |
+| `H34` | Full-record score for peaks ≥34 kt, in storms/year. |
+| `F0_proxy` through `F3_proxy` | Full-record rates in storms/year at ≥18, 26, 36 and 48 m/s, respectively. These thresholds approximate sustained-wind categories in the Boose study. |
+| `N64_profile_1` through `N64_profile_4` | Full-record 64 kt counts for radius/B pairs 20/1.5, 40/1.4, 60/1.3 and 80/1.2. Radii are in km. |
+| `N64_land_factor_1` | Full-record 64 kt count for the chosen profile with a land factor of 1.0. |
+| `H64_affected_years` | Number of calendar years with at least one qualifying storm. Divide by 71 for the fraction of affected years. |
+| `H64_last_year`, `H64_years_since` | Last year with a qualifying storm and 2026 minus that year. Cells with zero qualifying storms have no recency value. |
+| `wind_event_catalog`, `wind_profile_comparison`, `wind_time_step_comparison` | Per-storm modeling disposition, fit to observed wind radii in km, and cutoff disagreement between the five- and 2.5-minute time steps. |
+
+Use **H64 scores** to compare the magnitude of exposure between windows. A High rank marks the high group within its own window. Sharp diagonal edges can form where a modeled wind swath adds one storm to the cell count. NoData represents locations outside the study mask or an unsupported observation window. Valid zero counts remain zero.
 
 ## IBTrACS preparation contract
 
-This contract defines the Hurricane Winds prototype's observations and provenance. The [wind-estimation section below](#hurricane-wind-spatial-estimation-options-and-validation-gate) distinguishes the implemented benchmark from the remaining scientific decisions.
+This contract defines the Hurricane Winds prototype's observations and provenance. The [wind-estimation section below](#hurricane-wind-spatial-estimation-options-and-validation-gate) documents HURRECON and other published approaches.
 
 ## Inputs and preservation
 
@@ -113,11 +123,11 @@ Normalize documented numerical missing sentinels to null for analytical use whil
 
 Keep source units in preparation. Downstream engines must perform explicit conversions: kt to m/s, nautical miles to km or meters, and mb/hPa to Pa where required. Conversion factors and output units belong in their settings or manifests. No averaging-period conversion, gust factor, radius gap-fill, pressure estimate, temporal resampling, or wind-field interpolation occurs in preparation.
 
-`OBS_TIME_UTC` is an ArcGIS date representing UTC; ISO_TIME remains available for unambiguous text exchange. Never interpret it using the workstation's local timezone. Retain existing merged storm-motion fields in preparation. The wind benchmark derives separate motion from the USA positions; it does not overwrite those source fields.
+`OBS_TIME_UTC` is an ArcGIS date representing UTC; ISO_TIME remains available for unambiguous text exchange. Never interpret it using the workstation's local timezone. Retain existing merged storm-motion fields in preparation. The wind-processing model derives separate motion from the USA positions; it does not overwrite those source fields.
 
 ### Storm status is not one interchangeable code system
 
-Retain both NATURE and USA_STATUS. In **NATURE**, TS means tropical and ET means extratropical; in **USA_STATUS**, TS means tropical storm, EX means extratropical, and ET means extrapolated. A wind-speed threshold, NATURE, USA_STATUS, and USA_SSHS answer different questions. Do not infer hurricane status from the combined NATURE code. Preparation preserves complete selected tracks; the wind benchmark explicitly models NATURE TS/SS intervals, including tropical depressions when otherwise usable.
+Retain both NATURE and USA_STATUS. In **NATURE**, TS means tropical and ET means extratropical. In **USA_STATUS**, TS means tropical storm, EX means extratropical, and ET means extrapolated. The preparation preserves complete selected tracks, and the wind processing models NATURE TS/SS observations and intervals. Tropical-depression status bounds the missing winds during those particular observations.
 
 ## Outputs and consumer rules
 
@@ -147,11 +157,11 @@ Keep these meanings distinct downstream: **zero** is an eligible modeled/observe
 
 # Hurricane wind spatial estimation: options and validation gate
 
-The preparation workflow audits IBTrACS observations and establishes the shared grid. The implemented HURRECON benchmark reconstructs wind fields for Betsy, Hugo, Georges and Maria under four size scenarios. Review these results before selecting the configuration for historical event rates and hazard ranking.
+The preparation workflow audits IBTrACS observations and establishes the shared grid. The HURRECON implementation assesses the full storm record and uses one common size profile selected against reported wind radii.
 
 ## Quantity to estimate
 
-The benchmark target is each storm's maximum **10 m, 1-minute sustained wind speed** over supported tropical/subtropical intervals at each study-land cell. The catalog preserves event identity; the shared study mask supplies spatial coverage and exterior NoData. Separate event/year temporal-coverage products are not yet implemented and must accompany historical aggregation. A hurricane's reported maximum wind is the strongest wind within its circulation; it is not the wind at every location near its track. NOAA discusses measurement height, exposure, averaging periods, and the approximately 0.1-degree source resolution on printed page 5 of the [IBTrACS technical guide](https://www.ncei.noaa.gov/sites/default/files/2025-04/IBTrACS_version4r01_Technical_Details.pdf). The grid's 250 m cell size is an integration convention, not evidence of 250 m meteorological accuracy.
+The modeled quantity is each storm's maximum **10 m, 1-minute sustained wind speed** over supported tropical/subtropical intervals at each study-land cell. The catalog preserves event identity; the shared study mask supplies spatial coverage and exterior NoData. The storm ledger records both supported and unresolved intervals. A hurricane's reported maximum wind is the strongest wind within its circulation; it is not the wind at every location near its track. NOAA discusses measurement height, exposure, averaging periods, and the approximately 0.1-degree source resolution on printed page 5 of the [IBTrACS technical guide](https://www.ncei.noaa.gov/sites/default/files/2025-04/IBTrACS_version4r01_Technical_Details.pdf). The grid's 250 m cell size is an integration convention, not evidence of 250 m meteorological accuracy.
 
 Use **64 kt** as the primary future hurricane-force threshold and **34 kt** as a separately labeled tropical-storm-force sensitivity scenario. The proposed historical statistic is the number of distinct storms reaching or exceeding the threshold in each cell, divided by the **71 seasons from 1955 through 2025**. Its unit is events per year. It is not the probability of at least one exceedance in a year: multiple storms can occur in a year. That probability requires distinct affected-year counts and a declared treatment of incompletely observed years. No such statistic or **1/3/5 reclassification** is implemented here.
 
@@ -159,13 +169,13 @@ Use **64 kt** as the primary future hurricane-force threshold and **34 kt** as a
 
 | Candidate | Appropriate role | Main limitation to resolve |
 | --- | --- | --- |
-| HURRECON equations | Implemented local benchmark for historical-reconstruction design and sensitivity study | Choose and justify radius/profile parameters and surface treatment; historical configuration remains unselected. |
+| HURRECON equations | Full-record local wind reconstruction | Compare radius profiles and land reduction against the chosen configuration. |
 | CLIMADA | Independent implementation and model-choice comparison | Separate environment; make provider, imputation, distance, cutoff, and wind-model settings explicit. |
 | Recorded IBTrACS quadrant radii | Compare modeled 34/50/64 kt footprints where observations exist | Coverage varies through history; missing radii cannot mean zero exposure. |
 | Tropycal track proximity | Exploratory storm selection and alternative track-statistics checks | Proximity is not a wind-field reconstruction. |
 | `tcwind` | Small experimental Holland-model reference | Scientific normalization, missing-data behavior, and illustrative imputations require review. |
 
-### HURRECON: implemented benchmark, historical parameters pending
+### HURRECON: full-record reconstruction
 
 The reference HURRECON package accepts track location and maximum wind, plus radius/profile parameters and a land-water representation. Its regional workflow produces peak-wind GeoTIFF products and distinguishes land/water friction; it does not require central pressure. Parameter defaults still express scientific assumptions. See the author's [Python workflow and input definitions](https://github.com/hurrecon-model/HurreconPython).
 
@@ -202,36 +212,13 @@ Static deductions from the [physics implementation](https://github.com/zhang-962
 
 The [core API](https://github.com/zhang-962464/tcwind/blob/d3a379ce880297ee36e53be3fd741981501a30e2/tcwind/core.py) could evaluate existing cell-center coordinates through `at_points`, avoiding a second grid and large time cubes. Its default environmental pressure is 1013 mb. The four [test modules](https://github.com/zhang-962464/tcwind/tree/d3a379ce880297ee36e53be3fd741981501a30e2/tests) contain useful synthetic checks; they do not establish Puerto Rico observational skill. No tcwind code was executed during this review.
 
-## Evaluation before historical processing
-
-| Evaluation | Current evidence | Remaining work |
-|---|---|---|
-| Inputs and interpretation | Audited USA tracks, fixed grid, declared TS/SS intervals and explicit units; four benchmark storms pass input checks. | Resolve historical missing winds and unsupported intervals; document completeness before extending the cohort. |
-| Numerical behavior | Offline tests cover conversion, geometry, wind-profile behavior, interpolation, missing inputs and exact-bound optimization. A temporary 1,000-case scalar-speed comparison matched the author's implementation to floating-point precision; see [notices](../THIRD_PARTY_NOTICES.md). | Inspect representative point histories and maps. Pressure-deficit tests apply if a pressure-based comparison engine is added. |
-| Temporal and spatial support | All 16 default cases pass the proposed five-to-2.5-minute checks at the same grid centers. | Review the tolerance and boundary. Spatial-resolution sensitivity and external-raster resampling comparisons have not been performed; 250 m alignment alone does not validate spatial detail. |
-| Model comparison | Four HURRECON size scenarios are calculated for Betsy, Hugo, Georges and Maria. | The paired CLIMADA experiment remains pending; use identical tracks, locations, wind definitions and explicit engine controls. |
-| Observational evaluation | Positive IBTrACS quadrant radii support a source-consistency comparison; comparable station comparisons currently number zero. | Reconcile height, exposure, sustained/gust definitions and recording windows. Separate calibration from validation and hold out observations/events where feasible. |
-| Historical indicator and classes | The target is distinct storms exceeding 64 kt per cell over 71 seasons; 34 kt is a sensitivity threshold. | Review size and surface assumptions, add historical coverage accounting and agree the class method. Preserve the fixed denominator; do not silently renormalize incomplete coverage or count it as no events. |
-
-Before historical production, review input completeness, numerical behavior, convergence, model/reference differences and the historical configuration together. Unsupported periods must remain visible. The final class method must also match the class-wide project agreement. These scientific decisions do not prevent assembling and testing the benchmark ModelBuilder canvas now.
-
-## Reproducibility and code reuse
-
-Keep external research engines outside the ArcGIS environment. Pin release/commit, Python and dependency versions, model settings, input checksums, grid specification, and validation evidence for every future benchmark. Any external download must retain its URL, retrieval date, version, and license.
-
-HURRECON and CLIMADA carry [GPL-3.0 licenses](https://github.com/hurrecon-model/HurreconPython/blob/master/LICENSE) ([CLIMADA license](https://github.com/CLIMADA-project/climada_python/blob/main/LICENSE)); [Tropycal](https://github.com/tropycal/tropycal/blob/master/LICENSE) and [`tcwind`](https://github.com/zhang-962464/tcwind/blob/main/LICENSE) use MIT. Record these before importing, adapting, or distributing code; preserve notices and license texts and make any copied/adapted code identifiable. The local benchmark implements the published mathematical equations independently and attributes their sources. Source code from those engines is not bundled.
-
-## HURRECON benchmark implementation
-
-The implemented workflow defaults to four storms and four size scenarios before choosing a historical configuration. Its primary field is peak local one-minute sustained wind in m/s. The optional storm parameter accepts subsets of those four named SIDs, and a custom size table can replace the default pairs. Historical-cohort support must be added after the benchmark review. Model tropical and subtropical phases (`NATURE=TS/SS`), retain full USA-coordinate tracks, and derive motion from those positions. The fixed 250 m grid remains a computational convention with a generalized provisional coastline.
-
 ### Corrections to the supplied comparison report
 
 The report's performance claim requires a paired model experiment. Our local implementation choice follows deployment needs and the Puerto Rico research precedent. Historical size remains uncertain even when central pressure is unnecessary.
 
 - Boose's Table 1 lists sustained winds of 18-25, 26-35, 36-47 and 48-62 m/s for F0-F3. The suggested Saffir-Simpson crosswalk and recurrence classification cannot be attributed to those table boundaries. The 64 kt hurricane-force threshold converts to 32.924444... m/s and 34 kt to 17.491111... m/s. Use `1852/3600` for knots-to-m/s conversion.
 - The four tested size pairs are 20 km/B=1.5, 40/1.4, 60/1.3 and 80/1.2. The report's 30/1.4 combination is a project assumption. Recalculating its stationary 135 kt, 30 km/B=1.4 example gives outer 64 kt radii of 166.85 km over water and 116.25 km over land. Its claimed CLIMADA comparison and plotted radii need correction.
-- Actual snapshot checks found 62,400/62,485 usable winds (99.86%), positive pre-1979 central pressure in 6,908/19,907 records (34.70%), and positive pre-2004 RMW in 1,939/39,435 records (4.92%). There are 85 missing winds, all in USA_STATUS=TD/NATURE=TS records, and zero positive pre-2004 R64 quadrant radii. Preserve these limitations when extending the benchmark cohort.
+- Actual snapshot checks found 62,400/62,485 usable winds (99.86%), positive pre-1979 central pressure in 6,908/19,907 records (34.70%), and positive pre-2004 RMW in 1,939/39,435 records (4.92%). There are 85 missing winds, all in USA_STATUS=TD/NATURE=TS records, and zero positive pre-2004 R64 quadrant radii. Preserve these limitations when extending the historical cohort.
 - Van Beusekom's study fits storm parameters, applies terrain sheltering, and computes gale-wind energy. Those features require additional work beyond the friction-only benchmark.
 - Correct the report's bibliographic attribution to Cannon et al. (2023), rather than Ibanez, for the North American hurricane-regime paper. Correct Van Beusekom's author list and treat STORM generation and wind-probability papers as separate publications. The population-exposure paper is by Jing et al., rather than Chen.
 
@@ -244,33 +231,3 @@ The report's performance claim requires a paired model experiment. Our local imp
 | Cannon, J.B., Peterson, C.J., Godfrey, C.M. & Whelan, A.W. (2023), *Hurricane wind regimes for forests of North America*, PNAS 120, e2309076120. [DOI](https://doi.org/10.1073/pnas.2309076120) | Western North Atlantic/eastern North Pacific tracks, 1851-2022; 886 selected hurricanes | HURRECON wind fields, estimated storm size, wind-threshold recurrence and regional regimes | Includes HRRR model comparison and uncertainty in radius prediction. Supports multi-event wind analysis and the need to evaluate size assumptions; an external model comparison has different information support from station measurements. |
 | Holland, G.J. (2008), *A revised hurricane pressure-wind model*, Monthly Weather Review 136, 3432-3445. [DOI](https://doi.org/10.1175/2008MWR2395.1) | Hurricane pressure, wind and motion data | Pressure-wind relationship underlying the H08 alternative | Explains physical inputs and historical pressure uncertainty. Useful for evaluating an alternative model; our local field inventory determines actual pressure availability. |
 | Aznar-Siguan, G. & Bresch, D.N. (2019), *CLIMADA v1: a global weather and climate risk assessment platform*, GMD 12, 3085-3097. [DOI](https://doi.org/10.5194/gmd-12-3085-2019) | Global hazard/exposure datasets and application examples with varying spatial support | Hazard, exposure, impact and adaptation framework | Supports reproducible alternative hazard modeling. Use current version-specific API documentation for wind-model controls. Loss-function parameters require exposure and vulnerability interpretation. |
-
-### Calculation and retained products
-
-`Prepare Wind Inputs` rechecks the actual preparation/grid, publishes full native tracks and a cell-center table, and records hashes, units and settings in `hurricane_winds.gdb`. Transform EPSG:32161 cell centers to WGS84 with the recorded transformation. Great-circle distances use the author's 6367 km spherical radius and bearings use true north. The model evaluates winds directly at these cell centers.
-
-`Estimate Wind Fields` evaluates all selected size scenarios jointly at maximum intervals of 15, 5 and 2.5 minutes. Each native interval is divided into equal pieces no longer than the requested step, preserving its endpoints; the resulting series need not have a uniform cadence. Latitude, unwrapped longitude and wind are linear between valid native endpoints. Motion is derived from full native USA positions and interpolated from segment midpoints, with circular heading interpolation. Supported intervals require valid wind endpoints, at most six hours separation and TS/SS at both endpoints. Unsupported transitions are excluded from the modeled-phase interval; isolated eligible observations or missing eligible winds stop the benchmark. The wind-track table retains USA_IFLAG, agency, status and SOURCE_OID; the full original IFLAG remains accessible in prepared observations through that source key.
-
-Each radius/B pair is constant throughout each modeled storm. Recorded USA_RMW and pressure are not used to fit those values. Every study-land cell uses F=0.8 and asymmetry S=1, with the published nonnegative speed limit; F=1 is used in water-exposure radius comparisons and optional WATER station calculations. No land-cover friction raster or terrain sheltering is implemented. USA_WIND is treated as an over-water maximum, including around landfall. Applying the additional land factor could reduce an intensity already affected by land; assess this assumption before selecting production parameters.
-
-Streaming maxima avoid retaining a time-by-cell cube. An enclosing-circle upper bound can skip a time sample only when it cannot increase any cell's current maximum; there is no arbitrary 350 km screen or wind-storage cutoff.
-
-The default run retains 16 five-minute peak rasters in the geodatabase, one per storm/size pair; subsets or custom scenario tables change that count. Fifteen- and 2.5-minute arrays serve convergence evaluation and are released after comparison. The event catalog associates SID, storm name, radius, B, nominal time step, raster name and input fingerprint. Exterior cells remain NoData. Geodatabase tables hold timing, convergence, positive quadrant-radius comparisons, optional station comparisons and footprint summaries; full point time series are not retained. Reruns replace the workflow-owned tables and remove obsolete benchmark rasters, keeping one current result.
-
-The existing operational `validation_report.json` receives a `wind_benchmark` section. Top-level `passed` describes preparation only. Wind `status=EVALUATED` means evaluation completed; convergence failure produces a warning and is retained as `temporal_convergence_passed=false`, while unavailable station comparisons remain zero. Read these fields separately from `computational_checks_passed`. The code records `historical_configuration_selected=false`; selecting and implementing a historical configuration remains a subsequent decision.
-
-Running Validate Prototype recreates that report and clears the wind section. After changing preparation inputs or the grid, rerun the complete wind chain from Prepare Wind Inputs to regenerate the assessment; the retained wind geodatabase alone does not establish a current handoff.
-
-`Evaluate Wind Estimates` checks the retained rasters, exact grid, valid land coverage and provenance. The proposed 5-to-2.5-minute tolerances are P99 absolute peak difference <=1 m/s and disagreement at each of 34/64 kt <=1% of study land cells. Failed convergence is retained visibly for review. Computational/data failures raise tool errors. Positive R34/R64 values within 500 km of the enclosing study circle are compared with the modeled maximum water-exposure threshold radius in each quadrant; original and filled source flags are counted. This geographical window limits reference comparisons, not wind-field calculation. These comparisons reuse IBTrACS inputs and describe source consistency.
-
-P99 and footprint disagreement summarize all study-land cells. The maximum absolute difference is also recorded, but is not a pass criterion. Passing these tolerances does not establish a per-cell error bound or guarantee adequate sampling for each smaller island; inspect local differences when reviewing maps.
-
-Optional station comparisons require documented 60-second winds at 10 m within 0.5 m, land/water exposure, complete UTC observation windows and source references. Model each window at intervals no longer than 2.5 minutes, including its exact endpoints; reject windows crossing unsupported phases or extending beyond modeled coverage. Reject lower-bound/incomplete or mismatched observations rather than applying unverified gust/averaging conversions. Comparison rows retain the source, location, exposure, height and window. Empty station comparison tables mean independent station skill remains unmeasured; the report counts station/scenario comparison rows, not unique stations.
-
-In the radii comparison table, ORIGINAL counts USA_IFLAG O/V (original position and intensity); FILLED counts other source flags. V can still include filled radii or other fields, so these are row-provenance groups, not proof that a particular radius was measured independently. Zero, missing and nonpositive radii are excluded from the comparison rather than interpreted as observed zero extent.
-
-The benchmark uses Betsy 1956 (`1956222N13313`), Hugo 1989 (`1989254N13340`), Georges 1998 (`1998259N10335`) and Maria 2017 (`2017260N12310`). Review the scenarios together before selecting the historical configuration. The retained comparison indicator is distinct storms with local peak >=64 kt divided by 71 seasons, with 34 kt as a secondary measure and explicit incomplete-coverage handling. The classification report now compares richer damage/recurrence and annual-exceedance candidates for an as-of-2026 planning snapshot. Hurricane ranks and the drought/hurricane sum follow that evaluation.
-
-The NHC Maria tropical cyclone report was examined for comparable station observations. Table 4, pages 17-18, includes Puerto Rico winds with varying heights and incomplete records. Its page 23 footnotes specify two-minute sustained winds for land reports unless noted and eight-minute buoy winds unless noted. The one-minute offshore examples are measured at 4-5 m. These values need an additional exposure/averaging method before direct one-minute, 10 m validation. The optional station comparison remains empty until qualifying records are supplied. [NHC Maria report](https://www.nhc.noaa.gov/data/tcr/AL152017_Maria.pdf).
-
-The initial four-storm calculation met the proposed five-to-2.5-minute tolerances across all 16 cases: the largest P99 peak difference was 0.054 m/s and the largest 64 kt footprint disagreement was 0.089% of study land cells (rounded upward). This supports five-minute sampling for these cases, not a selected historical size configuration. Only Maria supplies positive R34/R64 values in the reference window. Its 64 kt radius MAE was about 30 km for 20 km/B=1.5 and 107 km for 40 km/B=1.4; larger scenarios diverged further. These results show consequential size sensitivity and do not establish station skill or a universally appropriate radius.

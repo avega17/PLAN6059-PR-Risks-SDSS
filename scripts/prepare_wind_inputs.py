@@ -9,7 +9,9 @@ def main():
     import arcpy
     from hurricane_winds import prepare_wind_inputs
     try:
-        result = prepare_wind_inputs(*(arcpy.GetParameterAsText(i) or None for i in range(4)))
+        # The saved model retains the former optional storm-list slot at index 3.
+        # Production always covers the full catalog.
+        result = prepare_wind_inputs(*(arcpy.GetParameterAsText(i) for i in range(3)))
         arcpy.SetParameterAsText(4, result['workspace'])
     except Exception as error:
         arcpy.AddError(str(error))

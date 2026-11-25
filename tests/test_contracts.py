@@ -172,6 +172,9 @@ class WindEquations(unittest.TestCase):
                     samples['wind'][i], radius, profile))
         np.testing.assert_allclose(actual, expected, rtol=1e-12)
         self.assertGreater(stats['bounded_skips'], 0)
+        cutoffs = np.array([17.5, 32.9, 32.9, 32.9])
+        screened, _ = peak_fields(samples, lat, lon, minimum_mps=cutoffs)
+        np.testing.assert_array_equal(screened >= cutoffs[:, None], expected >= cutoffs[:, None])
 
     def test_radii_and_convergence(self):
         import numpy as np
@@ -213,6 +216,9 @@ class DroughtProcessing(unittest.TestCase):
         self.assertEqual(summary['median'][0],5)
         strict,s=analyze_events(x,8,1)
         self.assertEqual((len(strict),s['maximum'][0]),(2,2))
+        d2, summary = analyze_events(x, 8, 3, minimum_dm=2)
+        self.assertEqual(d2[0][2:10], (7, 7, 10, 1, 1, 3, 0, 0))
+        self.assertEqual(summary['median'][0], 1)
 
     def test_unknown_censoring_and_buffer_only_events(self):
         import numpy as np
@@ -246,6 +252,36 @@ class DroughtProcessing(unittest.TestCase):
         enclosing=[(-70,16),(-60,16),(-60,20),(-70,20),(-70,16)]
         self.assertTrue(has_part_intersection(shape([enclosing]),envelope))
         with self.assertRaises(ValueError): has_part_intersection(shape([pr])[:-3],envelope)
+
+
+class HazardClassification(unittest.TestCase):
+    def test_relative_breaks_keep_ties_and_require_three_values(self):
+        import numpy as np
+        from utils.shared.hazard_rank import ranks, relative_breaks
+        a = np.array([0, 0, 1, 2, 2, np.nan])
+        b = np.array([0, 5, 5, 6, 12, 13, np.nan])
+        self.assertEqual(relative_breaks(a), (0, 1))
+        self.assertEqual(relative_breaks(b), (0, 6))
+        np.testing.assert_array_equal(ranks(a, *relative_breaks(a)), [1, 1, 3, 5, 5, np.nan])
+        self.assertIsNone(relative_breaks(np.array([0, 0, 1, np.nan])))
+
+    def test_new_year_windows_and_depression_bound(self):
+        from datetime import datetime, timezone
+        from utils.hurricane import wind
+        from utils.hurricane.wind_history import _new_year, reference_windows, yearly_samples
+        def record(y, m, d, h, velocity, status):
+            return dict(time=datetime(y, m, d, h, tzinfo=timezone.utc),
+                        lat=18., lon=-66., wind=velocity, nature='TS', source={'USA_STATUS':status})
+        points = [record(2005, 12, 31, 23, 50., 'HU'), record(2006, 1, 1, 1, 60., 'HU')]
+        years, unresolved, _ = yearly_samples(points, (18., -66.), 1., wind.SIZE_SCENARIOS, 17.)
+        self.assertFalse(unresolved)
+        self.assertLess(years[2005]['time'].max(), _new_year(2006))
+        self.assertEqual(years[2006]['time'].min(), _new_year(2006))
+        points[0].update(wind=None, source={'USA_STATUS':'TD'})
+        points[1].update(wind=20*wind.KNOT_MPS, source={'USA_STATUS':'TD'})
+        self.assertEqual(yearly_samples(points, (18., -66.), 1., wind.SIZE_SCENARIOS,
+                                        34*wind.KNOT_MPS), ({}, set(), 1))
+        self.assertEqual(reference_windows()[-2:], [('all_2026', 1955, 2026), ('rolling_2026', 1996, 2026)])
 
 
 if __name__ == '__main__':

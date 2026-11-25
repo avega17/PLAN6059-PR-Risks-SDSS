@@ -1,6 +1,6 @@
 # Puerto Rico hazards — SDSS course project
 
-ArcPy workflows prepare **Hurricane Winds** observations, benchmark local wind fields, acquire **Drought** data and calculate continuous drought indicators. Each hazard toolbox includes six Script Tools. The wind benchmark compares four size scenarios for Betsy, Hugo, Georges and Maria. Drought processing covers 2000-2025 with occupancy and event-duration summaries. Historical wind aggregation and final 1/3/5 ranking follow evaluation of those results.
+ArcPy workflows prepare **Hurricane Winds** observations, reconstruct historical wind exposure, and calculate **Drought** occupancy and event duration. The classification tools write a continuous score and a Low/Medium/High raster coded 1/3/5 for each hazard.
 
 | Workflow | Toolbox / saved model | Documentation |
 |---|---|---|
@@ -14,16 +14,16 @@ The acquisition models retain internal name `Model`; wind processing uses `Estim
 | Location | Purpose |
 |---|---|
 | `hurricane_winds.py`, `drought.py` | Callable workflows and command-line entrypoints |
-| `scripts/` | Twelve thin ArcGIS Script Tool adapters |
+| `scripts/` | Linked ArcGIS Script Tool adapters |
 | `utils/hurricane/`, `utils/drought/`, `utils/shared/` | Actual processing and runtime validation |
 | `Hazard_Variables/` | Original professor inputs; ignored by Git and preserved unchanged |
-| `output/hurricane/data`, `output/hurricane/reports` | Prepared observations and wind-benchmark GDBs, source inventory/manifest, validation JSON |
+| `output/hurricane/data`, `output/hurricane/reports` | Prepared observations, historical wind indicators and variants, final GeoTIFFs, and validation JSON |
 | `output/drought/plan`, `data`, `reports`, `cache` | Acquisition/processing GDBs, one weekly cube, manifests, one validation JSON and verified downloads |
 | `output/shared/grid` | One 250 m reference raster, study mask, projected boundary, specification and Natural Earth cache |
 | `output/arcgis/project`, `bridge` | Local ArcGIS project and MCP scratch/log runtime |
 | `docs/`, `figures/`, `references/` | Five maintained guides, two requested classification reports, two PNG graphs and supplied course/source documents |
 | `tools/` | Toolbox builder, definitions, PNG exporter and combined packager |
-| `tests/test_contracts.py` | Seventeen offline checks of data rules, wind equations and drought transitions |
+| `tests/test_contracts.py` | Offline checks of data rules, wind equations, drought transitions and course class boundaries |
 | `dist/PR_Risks_SDSS.zip` | One current portable code distribution; generated data excluded |
 
 Generated data, caches and the ArcGIS project are ignored by Git. Keep your raw inputs and cache when updating code. Source checksums and original download receipts are preserved; mutable cache indexes support relocation. The installed MCP environment lives outside this repository; [bridge configuration](docs/arcgis_mcp_bridge_setup.md) explains its runtime paths.
@@ -37,23 +37,28 @@ Use **ArcGIS Pro’s Python** for all hurricane stages and geodatabase publicati
 & 'C:/Program Files/ArcGIS/Pro/bin/Python/envs/arcgispro-py3/python.exe' drought.py run --arcpy-tables --offline
 ```
 
-Run the wind benchmark with ArcGIS Pro Python after preparation:
+After acquisition and preparation, use ArcGIS Pro Python to process the full records and make the course maps:
 
 ```powershell
-& 'C:/Program Files/ArcGIS/Pro/bin/Python/envs/arcgispro-py3/python.exe' hurricane_winds.py wind-benchmark
+python hurricane_winds.py wind-history
+python hurricane_winds.py classify
+python drought.py process
+python drought.py classify
+python hurricane_winds.py combine
+python hurricane_winds.py layouts
 ```
 
-This creates `output/hurricane/data/hurricane_winds.gdb` with 16 peak-wind rasters and size/convergence/reference comparison tables. The existing hurricane validation JSON receives a `wind_benchmark` section. The separate **HurricaneWinds_Estimate_Winds** canvas is saved in the toolbox; the setup guide provides exact values and connections. Its three Script Tools can already run individually or through the command above. Review the benchmark before choosing a historical storm-size configuration.
+The wind geodatabase holds reference-year variants and supporting indicators. Drought compares D1+ and D2+ using both recovery rules. The two classification tools use Spatial Analyst to write the final GeoTIFFs. They fit three Natural Breaks (Jenks) classes to each layer independently and preserve the underlying score for comparisons across periods or severity thresholds. The Python sum applies the same arithmetic as the course's **Raster Calculator** branch. Close the project before saving the three layouts with the last command.
 
 Omit drought `--offline` to fetch missing data. Resume reuses only verified cache entries. Standard Python can run `python drought.py run --offline`, using CSV as its primary representation; ArcGIS mode writes typed tables and adds CSV only with `--export-csv`. Hurricane CSV is also opt-in. The saved drought model has no professor-sample/year input; the individual planner and CLI retain optional local-archive reuse.
 
 After drought acquisition, run `python drought.py process` with ArcGIS Pro Python. It prepares the 1,360-map spatial cache and continuous hazard indicators without downloading again. The population-focused course index covers mainland PR, Vieques and Culebra; Mona is outside its scope, with sparse observations retained only for the shared-grid data audit. The processing guide explains both event rules and final classification gates. The second drought model uses Name=`ProcessDrought`, Label=`Drought_Process_USDM`; the setup guide provides its three stages, exact paths and public parameters.
 
-Hurricane selection is main tracks, seasons **1955–2025**: this snapshot has **128,098 source points**, **62,485 prepared observations**, **1,143 storms**. Prepared winds/positions use the USA stream. The separate benchmark estimates local wind fields for the four named storms. Drought uses **2000–2025**: **1,357 baseline weeks**, **3 recovery buffers**, **654,160 normalized rows**, **231 retained source warnings**. Buffers do not enter the historical denominator. The final validation JSON in each reports folder is the handoff to future processing.
+Hurricane selection is main tracks from **1955–2025**. The snapshot has **128,098 source points**, **62,485 prepared observations** and **1,143 storms**. Prepared winds and positions use the USA stream. Drought uses **2000–2025** with **1,357 baseline weeks**, **3 recovery buffers**, **654,160 normalized rows** and **231 retained source warnings**. The validation JSON in each reports folder records the processing and classification results.
 
 The shared provisional grid is EPSG:32161, 250 × 250 m anchored at (0,0), with Natural Earth 5.1.1 Puerto Rico/Vieques/Culebra/Mona coverage. It has 1,140 columns and 267 rows. Its 250 m computational cells do not establish that precision in the observations or generalized coastline.
 
-The classification reports compare methods and outline the remaining work; no 1/3/5 crosswalk has been adopted. Hurricane needs historical reconstruction beyond the four-storm benchmark. The drought report includes candidate breaks, class counts and clipped land-area sensitivity using the completed 2000–2025 indicators.
+The classification reports document the exact thresholds, alternative rules, class areas, source comparisons and limitations. If the supplied December 2025 FEMA geodatabase is present under `Hazard_Variables/`, the classification tools write tract-level comparisons to their geodatabases.
 
 ## Maintenance
 
@@ -72,4 +77,4 @@ The builder preserves GUI-authored model archive members; it cannot reconnect a 
 
 Development follows [AGENTS.md](AGENTS.md): reuse existing guides/destinations, clean temporary experiments, keep one canonical result and avoid unsolicited evidence files or expanded harnesses. The recovery checkpoint is Git tag `pre-cleanup-2026-11-12` on `main`; the repository simplification has been merged into `main`.
 
-The setup guides include Mermaid overviews of all four saved models and expandable algorithms for all twelve Script Tools, distinguishing actual ArcGIS tools from APIs and custom logic. See the [Boose method note](references/boose_2004_method_notes.md) for the damage-scale and recurrence evidence behind the revised hurricane classification planning.
+The setup guides include Mermaid overviews and expandable processing algorithms, distinguishing ArcGIS tools from APIs and custom logic. See the [Boose method note](references/boose_2004_method_notes.md) for the damage-scale and recurrence evidence supporting the wind indicators.

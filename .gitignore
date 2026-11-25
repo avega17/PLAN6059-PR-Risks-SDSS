@@ -11,4 +11,5 @@ tmp/
 
 Hazard_Variables/Drought/*
 Hazard_Variables/Hurricanes/*
+Hazard_Variables/NRI_FEMA_PR.gdb/
 *.pdf

@@ -144,6 +144,7 @@ def evaluate_drought_metrics(metrics_catalog):
         count = settings['baseline_count']
         expected = occupancy(cube,count,26)
         check_arrays = dict(N_VALID=expected['nvalid'],N_D1=np.where(expected['eligible'],expected['d1'],np.nan),
+            N_D2=np.where(expected['eligible'],expected['d2'],np.nan),
             W_D1=expected['wd1'],W_D2=expected['wd2'],ORDINAL_BURDEN=expected['burden'])
         with arcpy.da.SearchCursor(str(metrics_catalog),['DATASET']) as cursor:
             names = [r[0] for r in cursor]
@@ -164,22 +165,24 @@ def evaluate_drought_metrics(metrics_catalog):
         years = np.array([int(d[:4]) for d in settings['dates'][:count]])
         year_counts = {y:int(np.sum(years==y)) for y in range(2000,2026)}
         annual_valid = np.array([(cube[:count][years==y] <= 5).sum(axis=0) for y in range(2000,2026)])
-        annual_dry = np.array([((cube[:count][years==y] >= 2)&(cube[:count][years==y] <= 5)).sum(axis=0) for y in range(2000,2026)])
+        annual_dry = {dm: np.array([np.count_nonzero((cube[:count][years==y] > dm) &
+                     (cube[:count][years==y] <= 5), axis=0) for y in range(2000,2026)]) for dm in (1, 2)}
         seen = np.zeros((26,grid['rows'],grid['columns']),bool)
         with arcpy.da.SearchCursor(str(Path(workspace)/'annual_cell_metrics'),
-                                  ['CELL_ID','YEAR','N_EXPECTED','N_VALID','N_D1']) as cursor:
-            for cell,year,n,v,d in cursor:
+                                  ['CELL_ID','YEAR','N_EXPECTED','N_VALID','N_D1','N_D2']) as cursor:
+            for cell,year,n,v,d1,d2 in cursor:
                 r,c = divmod(cell,grid['columns']);y=year-2000
                 if (not 0<=y<26 or not 0<=r<grid['rows'] or not 0<=c<grid['columns'] or island[r,c]==0
                         or seen[y,r,c] or n!=year_counts[year]
-                        or v!=annual_valid[y,r,c] or d!=annual_dry[y,r,c]):
+                        or v!=annual_valid[y,r,c] or d1!=annual_dry[1][y,r,c]
+                        or d2!=annual_dry[2][y,r,c]):
                     raise ValueError('Annual cell table differs from the calendar/cube.')
                 seen[y,r,c]=True
         if not np.all(seen[:,island>0]) or np.any(seen[:,island==0]):
             raise ValueError('Annual table has missing or extra land-cell/year rows.')
         del annual_valid,annual_dry,seen
         _check_cell_metrics(arcpy,workspace,cube,island,grid,settings)
-        with tempfile.TemporaryDirectory(prefix='sdss_drought_evaluate_') as temporary:
+        with tempfile.TemporaryDirectory(prefix='sdss_drought_evaluate_', ignore_cleanup_errors=True) as temporary:
             scratch = str(Path(temporary)/'evaluation.gdb')
             try:
                 arcpy.management.CreateFileGDB(temporary,'evaluation.gdb')
@@ -197,7 +200,16 @@ def evaluate_drought_metrics(metrics_catalog):
                     raise ValueError('The valid no-drought benchmark must retain assessed land as None=0.')
                 _spatial_comparisons(arcpy,workspace,grid,settings,cube,island,geometries,scratch)
             finally:
-                arcpy.management.ClearWorkspaceCache()
+                arcpy.management.ClearWorkspaceCache(scratch)
+                if arcpy.Exists(scratch):
+                    try:
+                        arcpy.management.Delete(scratch)
+                    except arcpy.ExecuteError:
+                        if not arcpy.TestSchemaLock(scratch):
+                            arcpy.AddWarning('ArcGIS still holds the temporary comparison workspace. '
+                                             'Its lock is released when the geoprocessing session closes.')
+                        else:
+                            raise
         coverage = {name:dict(land_cells=int(np.sum(island==region)),
             complete_cells=int(np.sum((island==region)&expected['eligible'])),
             min_valid=int(expected['nvalid'][island==region].min()),
@@ -208,7 +220,7 @@ def evaluate_drought_metrics(metrics_catalog):
         settings.update(stage='VALIDATED',evaluation_software_sha256=sha256(__file__))
         settings_table(workspace,settings)
         primary=str(Path(workspace)/'W_D1');valid=str(Path(workspace)/'N_VALID')
-        mark_report(settings,'VALIDATED',computational_checks_passed=True,ranking_status='NOT_SELECTED',
+        mark_report(settings,'VALIDATED',computational_checks_passed=True,
             metrics_sha256=settings['metrics_sha256'],evaluation_software_sha256=settings['evaluation_software_sha256'],
             baseline_maps=1357,buffer_maps=3,year_count=26,coverage=coverage,
             index_scope=['mainland','Vieques','Culebra'],
@@ -219,7 +231,7 @@ def evaluate_drought_metrics(metrics_catalog):
                          'Source-consistency checks do not establish independent drought skill.',
                          'Completed duration summaries exclude censored events and use baseline spans.',
                          '250 m output alignment is not 250 m meteorological information support.'])
-        arcpy.AddMessage('Drought indicators validated for classification review; no ranking thresholds have been selected.')
+        arcpy.AddMessage('D1+ and D2+ indicators and event metrics passed the processing checks.')
         arcpy.AddMessage('Mona is outside the people-focused index; sparse observations are an expected edge case, retained as unknown/NoData.')
         return {'primary':primary,'valid_count':valid,'report':settings['validation_report']}
     except Exception as error:
@@ -231,7 +243,8 @@ def _check_cell_metrics(arcpy,workspace,cube,island,grid,settings):
     """Read the normalized cell table and check basic counts/duration semantics."""
     import numpy as np
     fields=['CELL_ID','N_VALID','N_EXPECTED','COVERAGE_FRACTION','N_D1_OBS','N_D2_OBS','W_D1','F_D1','ORDINAL_BURDEN']
-    fields += [f'{n}_{rule}W' for rule in (3,1) for n in ('EVENTS','COMPLETE','LEFT_CENS','RIGHT_CENS','MEDIAN_SPAN','MAX_SPAN')]
+    from .usdm_metrics import EVENT_RULES, EVENT_SUMMARIES
+    fields += [f'{n}_{suffix}' for _, _, suffix in EVENT_RULES for n in EVENT_SUMMARIES[:-1]]
     seen=set()
     with arcpy.da.SearchCursor(str(Path(workspace)/'cell_metrics'),fields) as cursor:
         for cell,nvalid,nexpected,fraction,d1,d2,wd1,fd1,burden,*events in cursor:
@@ -245,7 +258,7 @@ def _check_cell_metrics(arcpy,workspace,cube,island,grid,settings):
                     raise ValueError('Normalized indicator or denominator is invalid.')
             elif any(v is not None for v in (wd1,fd1,burden)):
                 raise ValueError('Incomplete cell has full-period normalized metrics.')
-            for offset in (0,6):
+            for offset in range(0, len(events), 6):
                 n,complete,left,right,median,maximum=events[offset:offset+6]
                 if (not 0<=complete<=n or not 0<=left<=n or not 0<=right<=n
                         or (complete==0 and (median is not None or maximum is not None))

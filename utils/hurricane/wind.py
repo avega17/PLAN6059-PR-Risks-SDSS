@@ -133,7 +133,8 @@ def interpolate_track(records, step_minutes, window=None):
                 heading=np.degrees(np.interp(seconds, midpoints, np.unwrap(np.radians(headings)))) % 360)
 
 
-def peak_fields(samples, cell_latitude, cell_longitude, scenarios=SIZE_SCENARIOS, progress=None):
+def peak_fields(samples, cell_latitude, cell_longitude, scenarios=SIZE_SCENARIOS, progress=None,
+                *, minimum_mps=0.0, friction=0.8):
     """Stream maxima for every scenario without retaining a time-by-cell cube.
 
     A spherical enclosing circle gives an upper bound on every cell's wind.
@@ -144,6 +145,7 @@ def peak_fields(samples, cell_latitude, cell_longitude, scenarios=SIZE_SCENARIOS
     lon = np.asarray(cell_longitude, dtype=float)
     radii = np.array([r for r, b in scenarios])
     profiles = np.array([b for r, b in scenarios])
+    thresholds = np.broadcast_to(minimum_mps, radii.shape)
     center_lat, center_lon = float(np.mean(lat)), float(np.mean(lon))
     enclosing_radius = float(np.max(range_bearing(center_lat, center_lon, lat, lon)[0])) + 1e-6
     center_distance = range_bearing(center_lat, center_lon, samples['lat'], samples['lon'])[0]
@@ -151,7 +153,7 @@ def peak_fields(samples, cell_latitude, cell_longitude, scenarios=SIZE_SCENARIOS
     bounds = np.empty((len(scenarios), len(center_distance)))
     for j, (radius, profile) in enumerate(scenarios):
         q = (radius / np.maximum(radius, minimum_distance)) ** profile
-        bounds[j] = 0.8 * samples['wind'] * np.sqrt(q * np.exp(1 - q))
+        bounds[j] = friction * samples['wind'] * np.sqrt(q * np.exp(1 - q))
     order = np.argsort(-np.max(bounds, axis=0), kind='stable')
     peaks = np.zeros((len(scenarios), len(lat)))
     floor = np.zeros(len(scenarios))
@@ -159,14 +161,15 @@ def peak_fields(samples, cell_latitude, cell_longitude, scenarios=SIZE_SCENARIOS
     for number, i in enumerate(order):
         if progress and number % 100 == 0:
             progress(number, len(order))
-        if np.all(bounds[:, i] + 1e-10 < floor):
+        active = np.flatnonzero(bounds[:, i] + 1e-10 >= np.maximum(floor, thresholds))
+        if not len(active):
             continue
         distance, bearing = range_bearing(samples['lat'][i], samples['lon'][i], lat, lon)
         values = wind_speed(distance[None, :], bearing[None, :], samples['lat'][i],
                             samples['heading'][i], samples['speed'][i], samples['wind'][i],
-                            radii[:, None], profiles[:, None])
-        np.maximum(peaks, values, out=peaks)
-        floor = np.min(peaks, axis=1)
+                            radii[active, None], profiles[active, None], friction=friction)
+        peaks[active] = np.maximum(peaks[active], values)
+        floor[active] = np.min(peaks[active], axis=1)
         evaluated += 1
     return peaks, dict(samples=len(order), evaluated=evaluated, bounded_skips=len(order) - evaluated)
 

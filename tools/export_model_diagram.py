@@ -18,7 +18,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TITLE = 'Hurricane Winds · saved ModelBuilder graph'
 DEFAULT_SUBTITLE = 'HurricaneWinds_Fetch_IBTrACS · three Script Tools · seasons 1955–2025'
-DEFAULT_FOOTER = 'Audit prototype only · provisional boundary · no local-wind estimation or hazard ranking'
+DEFAULT_FOOTER = 'Preparation and historically modeled hazard on the shared 250 m grid'
+WIND_OUTPUT_LABELS = {'Wind Benchmark Summary': 'Wind Evaluation Summary',
+                      'Validated Wind Benchmark': 'Validated Wind History'}
 
 
 def _render_diagram(toolbox, model_name, *, title, subtitle, footer):
@@ -91,7 +93,8 @@ def _render_diagram(toolbox, model_name, *, title, subtitle, footer):
                        facecolor=fill, edgecolor='#52728b', linewidth=.9, zorder=2))
         # Fit long file basenames to the printed node width in wide diagrams.
         wrap_width = min(17, max(10, int(width / horizontal_span * .92 * 9.6 * 72 / (9.3 * .6))))
-        axis.text(x + width/2, y + height/2, textwrap.fill(node_title, wrap_width),
+        display_title = WIND_OUTPUT_LABELS.get(node_title, node_title) if model_name == 'EstimateWinds' else node_title
+        axis.text(x + width/2, y + height/2, textwrap.fill(display_title, wrap_width),
                   ha='center', va='center', fontsize=9.3, linespacing=1.25,
                   fontfamily='DejaVu Sans', color='#17384c', zorder=3)
     fig.text(.055, 1 - .33 / figure_height, title,
@@ -104,7 +107,7 @@ def _render_diagram(toolbox, model_name, *, title, subtitle, footer):
                  bbox={'boxstyle': 'round,pad=.35', 'fc': color, 'ec': '#52728b', 'lw': .6})
     fig.text(.055, .42 / figure_height,
              'Saved ModelBuilder node positions and connections; connectors rerouted for readability.\n'
-             'Colors denote roles. Public parameters and internal pipeline connectors are shown.',
+             'Colors denote roles. Connector labels describe the current Script Tool outputs.',
              fontsize=8.5, color='#466477', linespacing=1.5)
     fig.text(.055, .12 / figure_height, footer,
              fontsize=8.2, color='#466477')

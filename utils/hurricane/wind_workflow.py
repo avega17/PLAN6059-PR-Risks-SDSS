@@ -1,4 +1,4 @@
-"""ArcPy publication and evaluation for the four-storm HURRECON benchmark."""
+"""ArcPy publication and evaluation for HURRECON wind fields."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -49,7 +49,10 @@ def _settings(arcpy, workspace, document=None):
 def _mark_report(settings, status, **details):
     path = Path(settings['validation_report'])
     report = json.loads(path.read_text(encoding='utf-8'))
-    report['wind_benchmark'] = dict(status=status, workspace=settings['workspace'],
+    key = 'historical_wind' if settings.get('mode') == 'HISTORICAL' else 'wind_benchmark'
+    if key == 'historical_wind':
+        report.pop('classification', None)
+    report[key] = dict(status=status, workspace=settings['workspace'],
                                     input_fingerprint=settings['input_fingerprint'],
                                     updated_utc=datetime.now(timezone.utc).isoformat(), **details)
     _write_json(path, report)
@@ -107,7 +110,7 @@ def _digest_tracks(tracks):
 
 def prepare_wind_inputs(validated_hurricane_data, grid_spec, output_folder,
                         benchmark_storms=None):
-    """Revalidate prepared inputs and publish full native benchmark tracks."""
+    """Revalidate prepared inputs and publish complete native tracks."""
     import arcpy
     report_path = Path(validated_hurricane_data).resolve()
     report = json.loads(report_path.read_text(encoding='utf-8'))
@@ -125,12 +128,13 @@ def prepare_wind_inputs(validated_hurricane_data, grid_spec, output_folder,
     grid = json.loads(grid_path.read_text(encoding='utf-8'))
     if (grid['wkid'], grid['cell_size']) != (32161, 250):
         raise ValueError('Wind modeling requires the validated EPSG:32161 250 m grid.')
-    selected = benchmark_storms or wind.BENCHMARK_STORMS
+    selected = benchmark_storms
     if isinstance(selected, str):
         selected = [v.strip().strip("'\"") for v in selected.replace(',', ';').split(';') if v.strip()]
-    selected = list(dict.fromkeys(selected))
-    if not selected or set(selected) - set(wind.BENCHMARK_STORMS):
-        raise ValueError('This benchmark supports Betsy 1956, Hugo 1989, Georges 1998 and Maria 2017.')
+    selected = list(dict.fromkeys(selected or ()))
+    historical = not selected
+    if historical and (manifest['summary']['start_season'], manifest['summary']['end_season']) != (1955, 2025):
+        raise ValueError('Historical wind processing uses the complete 1955–2025 preparation.')
     output = Path(output_folder).resolve()
     if output.suffix.lower() == '.gdb':
         raise ValueError('Output Folder must be a directory containing hurricane_winds.gdb.')
@@ -141,7 +145,8 @@ def prepare_wind_inputs(validated_hurricane_data, grid_spec, output_folder,
     settings = dict(workspace=workspace, validation_report=str(report_path), grid_spec=str(grid_path),
                     grid_sha256=_sha256(grid_path), preparation_manifest=manifest['manifest'],
                     preparation_sha256=_sha256(manifest_path), storm_ids=selected,
-                    mode='BENCHMARK', statuses=['TS', 'SS'], units='m/s', native_radii_units='nautical miles',
+                    mode='HISTORICAL' if historical else 'BENCHMARK', statuses=['TS', 'SS'],
+                    units='m/s', native_radii_units='nautical miles',
                     friction_land=.8, asymmetry=1., earth_radius_km=wind.EARTH_KM,
                     equation_source=wind.SOURCE, created_utc=datetime.now(timezone.utc).isoformat(),
                     software_sha256={p.name: _sha256(p) for p in (Path(__file__), Path(wind.__file__))},
@@ -156,17 +161,18 @@ def prepare_wind_inputs(validated_hurricane_data, grid_spec, output_folder,
     with arcpy.EnvManager(extent=None, mask=None):
         with arcpy.da.SearchCursor(manifest['observations'], [field_map.get(n, n) for n in names]) as cursor:
             for values in cursor:
-                if values[0] in selected:
+                if historical or values[0] in selected:
                     row = list(values)
                     row[6] = None if row[6] is None else row[6] * wind.KNOT_MPS
                     rows.append(row)
         _table(arcpy, workspace, 'wind_tracks', TRACK_FIELDS, rows)
         tracks = _track_rows(arcpy, workspace)
-        if set(tracks) != set(selected):
-            raise ValueError('One or more requested benchmark storms are absent from prepared observations.')
-        for sid, records in tracks.items():
+        if not historical and set(tracks) != set(selected):
+            raise ValueError('One or more requested storms are absent from prepared observations.')
+        settings['storm_ids'] = sorted(tracks) if historical else selected
+        for sid in selected:
             try:
-                wind.validate_track(records)
+                wind.validate_track(tracks[sid])
             except ValueError as error:
                 raise ValueError(f'{sid}: {error}') from error
         settings['land_cells'] = _coordinates(arcpy, workspace, grid)
@@ -179,7 +185,7 @@ def prepare_wind_inputs(validated_hurricane_data, grid_spec, output_folder,
            ('PROFILE_B', 'DOUBLE', None)], wind.SIZE_SCENARIOS)
     _settings(arcpy, workspace, settings)
     _mark_report(settings, 'INPUTS_READY')
-    arcpy.AddMessage(f'Prepared {len(tracks)} benchmark storms and {settings["land_cells"]:,} land cells.')
+    arcpy.AddMessage(f'Prepared {len(tracks):,} storms and {settings["land_cells"]:,} land cells.')
     return {'workspace': workspace}
 
 
@@ -224,8 +230,11 @@ def _raster(arcpy, values, name, workspace, grid, row, column):
 
 
 def estimate_wind_fields(workspace, size_scenarios=None):
-    """Run the size/time benchmark; retain only the sixteen 5-minute peak fields."""
+    """Estimate local winds and accumulate the historical indicators."""
     import arcpy
+    if _settings(arcpy, workspace)['mode'] == 'HISTORICAL':
+        from .wind_history import estimate_history
+        return estimate_history(workspace, size_scenarios)
     workspace = str(Path(workspace).resolve())
     settings = _settings(arcpy, workspace)
     if settings['stage'] not in {'INPUTS_READY', 'FIELDS_READY', 'EVALUATED', 'ESTIMATING'}:
@@ -308,11 +317,14 @@ def estimate_wind_fields(workspace, size_scenarios=None):
 
 
 def evaluate_wind_estimates(wind_catalog, reference_observations=None):
-    """Inspect retained rasters and evaluate temporal/observational evidence."""
+    """Check the published wind fields and their coverage."""
     import arcpy
     wind_catalog = str(Path(wind_catalog).resolve())
     workspace = str(Path(wind_catalog).parent)
     settings = _settings(arcpy, workspace)
+    if settings['mode'] == 'HISTORICAL':
+        from .wind_history import evaluate_history
+        return evaluate_history(wind_catalog, reference_observations)
     if settings['stage'] not in {'FIELDS_READY', 'EVALUATED'}:
         raise ValueError('Wind fields are incomplete. Run Estimate Wind Fields successfully first.')
     if _sha256(settings['grid_spec']) != settings['grid_sha256']:

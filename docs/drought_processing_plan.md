@@ -1,8 +1,8 @@
 # Puerto Rico drought: literature review and processing design
 
-This maintained design combines the literature review, acquisition findings and the continuous-indicator implementation. The second workflow prepares weekly spatial states, calculates occupancy/severity and both event rules, and evaluates the results before classification review. Final ranking remains a separate phase. See [ModelBuilder setup](drought_modelbuilder_setup.md) for exact parameters. Research/library versions below describe their inspection, not a promise of current external releases.
+The workflow prepares weekly spatial states, calculates occupancy, severity and event statistics for D1+ and D2+, and evaluates the results. The classifier fits a separate set of three course classes to each severity threshold. See the [ModelBuilder setup](drought_modelbuilder_setup.md) for exact parameters.
 
-The [classification report](drought_classification_report.md) now provides measured candidate breaks, class counts, clipped land areas and a transition matrix for the completed indicators. Its recommendations remain open for review; no final crosswalk is adopted.
+The [classification report](drought_classification_report.md) documents the per-layer course breaks, class counts, clipped land areas and transition matrices.
 
 ## Discussing the saved drought acquisition model
 
@@ -39,14 +39,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Inputs["Validated Drought Data + Grid Specification<br/>Processing Folder"] --> Prepare["Prepare Drought States"]
-    Prepare --> Workspace["Processing Workspace · internal<br/>Dated polygons and weekly cube reference"]
-    Workspace --> Calculate["Calculate Drought Metrics"]
-    Calculate --> Catalog["Metrics Catalog · internal<br/>Names and units of published indicators"]
-    Catalog --> Evaluate["Evaluate Drought Metrics"]
-    Evaluate --> Indicator["D1+ Weeks per Year"]
-    Evaluate --> Coverage["Valid Week Count"]
-    Evaluate --> Report["Validated Drought Metrics"]
+    A["Weekly USDM categories, 2000–2025"] --> B["Prepare Drought States"]
+    B --> C["Calculate Drought Metrics"]
+    C --> D["Evaluate Drought Metrics"]
+    D --> E["Classify Drought Hazard"]
+    E --> F["D1+ weeks per year and Low / Medium / High"]
+    E --> G["D2+ comparison"]
 ```
 
 [Download the drought processing diagram as a PNG](../figures/discussion/drought_processing.png).
@@ -54,10 +52,10 @@ flowchart TD
 | Stage | What to point out in the discussion |
 | --- | --- |
 | **Prepare Drought States** | Reuses verified spatial products when available. A fresh build uses **Pairwise Clip**, **Project**, **Dissolve** and **Polygon To Raster** to place weekly categories on the shared grid. The weekly cube keeps None, D0 and unknown as distinct values. |
-| **Calculate Drought Metrics** | Counts D1-or-worse observations and divides by **26 years** for cells with all **1,357 baseline weeks**. It also calculates severity and event duration with strict and three-week recovery rules. January 2026 buffer maps inform event termination while baseline counts stay within 2000–2025. |
-| **Evaluate Drought Metrics** | Checks indicator values and annual counts against the cube, including coverage and NoData. It uses **Create Fishnet** and **Pairwise Intersect** to compare cell-center and dominant land-area assignments for six benchmark weeks. It returns the indicator raster, the coverage raster and the updated validation JSON. |
+| **Calculate Drought Metrics** | Counts D1+ and D2+ observations and divides by **26 years** for cells with all **1,357 baseline weeks**. It calculates events for each threshold with one and three weeks to confirm recovery. January 2026 buffer maps can confirm the end of an event that began during 2000–2025. |
+| **Evaluate Drought Metrics** | Checks indicator values and annual counts against the cube, including coverage and NoData. It uses **Create Fishnet** and **Pairwise Intersect** to compare cell-center and dominant land-area assignments for six comparison weeks. It returns the indicator raster, the coverage raster and the updated validation JSON. |
 
-Put **D1+ Weeks per Year** beside **Valid Week Count** in the discussion. Together they show where drought occurred more often and which cells have enough observations for that comparison. The proposed 1/3/5 thresholds are discussed in the [drought classification report](drought_classification_report.md).
+Put **D1+ Weeks per Year** beside **Valid Week Count** in the discussion. Together they show where drought occurred more often and which cells have enough observations for that comparison. The [drought classification report](drought_classification_report.md) gives the final 1/3/5 thresholds and the measured D2+ comparison.
 
 ## Implemented processing contract
 
@@ -67,7 +65,7 @@ The three processing tools are **Prepare Drought States → Calculate Drought Me
 
 The first complete spatial build processed all 1,360 maps in about **117 minutes** on this workstation; the compressed cube occupies **4.55 MiB**. The conservative screen avoided GIS clipping for 607 weeks. The metric tool then completed in **4 minutes 39 seconds**. These are measured local runtimes, not guarantees for another machine. Ordinary reruns verify and reuse the completed spatial cache.
 
-The actual saved `Drought_Process_USDM` model subsequently passed all three stages in **7 minutes 15 seconds**, including a 37-second spatial-cache check and about two minutes of evaluation. Its two public rasters, catalog and internal datasets survived model completion. The retained geodatabase is about **253 MiB** and contains 1,233 dated/category polygon records, 144,085 cell rows, 3,746,210 annual rows, 2,040,640 event rows across both recovery rules and 11 indicator rasters.
+The saved `Drought_Process_USDM` model passed all three stages in **6 minutes 39 seconds** with the verified spatial cache. Its two public rasters, catalog and internal datasets survived model completion. The geodatabase contains 144,085 cell rows, 3,746,210 annual rows, **2,413,234 event rows** across both severity thresholds and both recovery rules, and **19 cataloged indicator rasters**. The classification tool writes the D1+ score and class TIFFs and keeps the D2+ comparison in that geodatabase.
 
 | Island | Study cells | Complete 1,357-week cells |
 |---|---:|---:|
@@ -76,7 +74,7 @@ The actual saved `Drought_Process_USDM` model subsequently passed all three stag
 | Culebra | 421 | 421 |
 | Mona (audit only; outside index scope) | 760 | 0 |
 
-Across the 143,325 eligible cells covering the inhabited study islands, `W_D1` ranges from **0 to 8.96 weeks/year**, with a cell mean of **2.57**. The six benchmark weeks show **99.960-100%** agreement between cell-center and dominant-land-area assignment; the largest difference affects 57 cells, representing about 2.78 km² of land. Polygon-versus-API cumulative-area differences reach about **1.53 percentage points**. These comparisons retain the reference warnings and quantify source/mask differences; they neither establish independent drought skill nor settle sensitivity across all weeks.
+Across the 143,325 eligible cells covering the inhabited study islands, `W_D1` ranges from **0 to 8.96 weeks/year**, with a cell mean of **2.57**. The six comparison weeks show **99.960-100%** agreement between cell-center and dominant-land-area assignment; the largest difference affects 57 cells, representing about 2.78 km² of land. Polygon-versus-API cumulative-area differences reach about **1.53 percentage points**. These comparisons retain the reference warnings and quantify source/mask differences; they neither establish independent drought skill nor settle sensitivity across all weeks.
 
 Preparation inspects the actual source CRS, clips original national geometries before projection, dissolves by date/category and checks geometry and cross-category overlap. Repairs occur only in working copies; feature loss stops the workflow. Numerical overlap tolerance is 0.000001 m²; larger cross-category overlaps require source review. Original ZIPs, hashes, receipts and API disagreements remain unchanged. A conservative NumPy ring-box screen skips GIS work only for definitely empty regional candidates; it does not reconstruct rings or infer assessment coverage.
 
@@ -88,7 +86,7 @@ Three-week events end at the last D1+ observation before three consecutive D0/No
 
 Evaluation reads actual raster pixels and normalized tables, checks all annual rows against the cube, and checks the known Culebra controls. Six in-cohort weeks support state reference-area and cell-assignment comparisons, including 2026-01-06 only as a buffer. Exact dominant-category land-area assignment includes the None remainder; equal-area ties favor the higher category. A Polygon To Raster priority field is not used to emulate area-only tie breaking, because it can override area dominance. State comparisons are diagnostic because source coastlines, domain coverage and area methods differ. No new municipio boundary download is required; full 78-municipio spatial reconciliation remains deferred.
 
-The existing drought validation JSON receives a separately scoped `processing` assessment. Acquisition `passed` is not processing approval. Processing `VALIDATED` describes computational consistency and explicit coverage exclusions; it does not establish independent drought skill, approve 1/3/5 breaks or eliminate coastal uncertainty. Changes to map dates, roles, archive contents or the grid invalidate the prepared cache; a repeated fetch with identical maps and a new receipt timestamp does not. Classification will use integer counts and eligible coverage, preserving unknown cells as NoData.
+The existing drought validation JSON receives a separately scoped `processing` assessment. Acquisition `passed` is not processing approval. Processing `VALIDATED` describes computational consistency and explicit coverage exclusions; it does not establish independent drought skill, approve 1/3/5 breaks or eliminate coastal uncertainty. Changes to map dates, roles, archive contents or the grid invalidate the prepared cache; a repeated fetch with identical maps and a new receipt timestamp does not. Classification uses integer counts and eligible coverage, preserving unknown cells as NoData.
 
 ### Corrections to the supplied implementation blueprint
 
@@ -97,7 +95,26 @@ The existing drought validation JSON receives a separately scoped `processing` a
 - No ring reconstruction or new GeoParquet dependency is needed for this round. Original GIS geometry handles shells and holes.
 - Recovery confirms an event's last D1+ week; it does not automatically assign termination to late 2025 or append three weeks to duration.
 - The 2014-2016 spatial pattern supports inspection against credible references; expected east/south severity is not an independent-validation criterion.
-- Tertiles, fixed 3/7-week breaks, class-transition matrices and combined hurricane/drought ranks remain in the later classification phase.
+- The classification stage fits the three classes, compares alternative rules and calculates class-transition areas.
+
+## Drought calculations and geodatabase layers
+
+1. Clip dated USDM polygons to the study area, project onto the shared grid and assign the category at each cell center. The weekly cube stores category codes 0 for None, 1 for D0, 2–5 for D1–D4 and 255 for unknown. Set None only where the week's assessed domain supports it.
+2. Count qualifying baseline weeks and divide by 26 to obtain weeks/year. A cell needs 1,357 valid baseline weeks for these full-period scores. Count runs of qualifying weeks separately. Each event begins at a qualifying week and ends at the last qualifying week before one or three below-threshold observations confirm recovery. A short dip inside an event counts toward the elapsed span. Exclude trailing recovery weeks from the span. The January 2026 buffer can confirm recovery, and gaps in assessed coverage produce censor flags.
+3. Fit three Natural Breaks (Jenks) classes to the valid D1+ counts. Repeat independently for D2+. Store the exact count cuts and class summaries in the validation report and use **Reclassify** to write integer 1/3/5 rasters.
+
+| Layer or table in `drought_processing.gdb` | Definition and units |
+| --- | --- |
+| `N_VALID` | Number of valid baseline weekly assessments. |
+| `N_D1`, `N_D2` | Number of weeks at D1 or worse, or D2 or worse, in 2000–2025. |
+| `W_D1`, `W_D2` | Corresponding count divided by 26, in weeks/year. `RiskDrought_score250.tif` uses D1+ and `D2_score_250` uses D2+. |
+| `W_D1_2004` | D1+ weeks/year in 2004–2025, using 1,148 qualifying assessment dates as the coverage requirement and 22 years as the rate denominator. |
+| `F_D1` in `cell_metrics` | D1+ count divided by 1,357 baseline weeks and multiplied by 100, in percent of assessed weeks. |
+| `ORDINAL_BURDEN` | Mean baseline encoded state × 100, an ordinal index from 0 to 500. |
+| `EVENT_RATE_1W`, `EVENT_RATE_3W`, `EVENT_RATE_D2_1W`, `EVENT_RATE_D2_3W` | Observed qualifying events intersecting the baseline divided by 26, in events/year. Suffixes indicate one or three weeks to confirm recovery. Without `D2` the threshold is D1+. |
+| `MEDIAN_SPAN_*`, `MAX_SPAN_*` | Median or maximum baseline span of completed, uncensored events, in weeks. The suffixes follow the event-rate convention. |
+| `RiskDrought_rank250.tif`, `D2_rank_250` | Three-class D1+ course TIFF (in the data folder) and D2+ comparison (in the geodatabase). Each uses its own fitted count cuts. |
+| `cell_metrics`, `annual_cell_metrics`, `drought_events`, `metric_catalog` | One row per cell, cell/year, or event, plus paths and units for the indicator rasters. Event fields record threshold, recovery rule, timing, qualifying weeks and censor flags. |
 
 ## 1. Recommended scope and observation period
 
@@ -182,22 +199,11 @@ A state DSCI time series cannot create within-island spatial contrasts. Reconstr
 
 No reviewed source establishes universal Low/Medium/High thresholds for the proposed 2000-2025 `W_D1` surface. USDM instantaneous D1-D4 categories cannot directly classify a multi-year week-count raster.
 
-**Recommended candidate:** fixed relative thirds of `W_D1` over the complete-coverage, population-focused study domain: mainland PR, Vieques and Culebra. Calculate the 1/3 and 2/3 quantiles once, record the quantile method (initially NumPy `linear`), domain/grid hash, dates, exact numeric values and units, then freeze them. Do not recompute by municipio or map extent. Suggested boundary convention:
-
-| Eligible indicator | Rank |
-|---|---:|
-| `0 <= W_D1 <= b1` | 1 |
-| `b1 < W_D1 <= b2` | 3 |
-| `W_D1 > b2` | 5 |
-| Ineligible coverage or unknown indicator | NoData |
-
-The current indicator yields candidate `b1=38/26` and `b2=3` weeks/year; see the classification report for exact count boundaries and the measured comparison. These values are not adopted breaks. If ties collapse the two breakpoints after a future input/domain change, investigate another fixed classification rather than jittering data or forcing three equal cell counts. Relative high means high **within this domain and period**, not a validated damage threshold. A zero value stays eligible; its class follows the declared fixed rule.
-
-Compare this candidate with (a) D2-based occupancy and (b) exploratory fixed `W_D1` breaks at **3 and 7 weeks/year**: Low `<=3`, Medium `(3,7]`, High `>7`. The latter adapts selected boundaries from the PR planning draft's five-bin legend; it is **our unvalidated three-bin adaptation**, and its original minimum category remains unresolved. Retain the continuous indicators whichever ranking is chosen.
+**Course rule.** Fit three Natural Breaks (Jenks) classes independently to D1+ and D2+ using the integer counts over the full eligible three-island domain. Each layer records its own two inclusive upper cuts. Equal counts stay together, observed zero falls in Low, and unknowns stay NoData. Use the score in weeks/year to compare how often drought actually occurred at the two thresholds. Quantile, Equal Interval and the 3/7-weeks rule remain numerical comparisons for D1+.
 
 Before selecting final classes:
 
-- Inspect the implemented state threshold-area comparisons for benchmark weeks, accounting for different coastline masks and area methods. Full municipio spatial comparisons remain deferred. A match checks processing consistency, not independent drought skill.
+- Inspect the implemented state threshold-area comparisons for comparison weeks, accounting for different coastline masks and area methods. Full municipio spatial comparisons remain deferred. A match checks processing consistency, not independent drought skill.
 - Compare the **2015 drought** and later well-documented events with rain/streamflow/reservoir observations and impact records where available. USDM already uses some such inputs; document dependence and avoid calling reused inputs independent validation.
 - Compare recovery rules, D1/D2 thresholds, full versus 2004-onward periods, coastal cell assignment and alternate ranking. Publish a class-transition matrix and changed **land area**, plus rank agreement for continuous fields.
 - Quantify coverage and boundary uncertainty for the inhabited study islands; use year/event block resampling for uncertainty rather than treating adjacent weekly maps as independent trials. With 26 years, avoid unsupported long-return-period estimates.

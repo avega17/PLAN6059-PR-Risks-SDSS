@@ -193,8 +193,9 @@ def main():
         ('DroughtRisk_Model_Toolbox.atbx', DROUGHT_TOOLS, 'droughtprobe', 'Drought')):
         path = build_toolbox(ROOT/filename, options.overwrite, tools=specs, alias=alias,
                              title='Puerto Rico SDSS - ' + title,
-                             description=('Preparation and HURRECON wind-field benchmarking.' if alias == 'prrisks'
-                                          else 'Linked drought acquisition and continuous hazard-processing Script Tools.'))
+                             description=('IBTrACS preparation, full-record wind processing, and hazard classes.'
+                                          if alias == 'prrisks' else
+                                          'USDM acquisition, historical drought metrics, and hazard classes.'))
         report = {'toolbox': str(path)}
         if options.verify:
             report['tools'] = verify_toolbox(path, specs)
